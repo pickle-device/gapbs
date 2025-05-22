@@ -89,7 +89,7 @@ int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
       auto prefetch_iter = q_iter + prefetch_distance;
       if (prefetch_iter < queue.end())
       {
-          *UCPage = (uint64_t)(&(*prefetch_iter));
+          *UCPage = (uint64_t)(&(*q_iter));
           //std::cout << "Prefetch hint at 0x" << std::hex << (uint64_t)(&(*prefetch_iter)) << std::dec << std::endl;
           //std::cout << "Hinting prefetch node id 0x" << std::hex << (*check_iter) << ", prefetch hint: 0x" << (uint64_t)(&(*prefetch_iter)) << std::dec << std::endl;
       }
