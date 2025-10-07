@@ -77,12 +77,17 @@ using namespace std;
 uint64_t* UCPage = NULL;
 uint64_t* PerfPage = NULL;
 
+const uint64_t PERF_THREAD_START = 0;
+const uint64_t PERF_THREAD_COMPLETE = 1;
+
 int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
                            SlidingQueue<NodeID> &queue, const uint64_t prefetch_distance) {
   int64_t scout_count = 0;
   #pragma omp parallel
   {
     QueueBuffer<NodeID> lqueue(queue);
+    const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
     #pragma omp for reduction(+ : scout_count) nowait
     for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
       NodeID u = *q_iter;
@@ -91,8 +96,6 @@ int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
       if (prefetch_iter < queue.end())
       {
           *UCPage = (uint64_t)(&(*q_iter));
-          //std::cout << "Prefetch hint at 0x" << std::hex << (uint64_t)(&(*prefetch_iter)) << std::dec << std::endl;
-          //std::cout << "Hinting prefetch node id 0x" << std::hex << (*check_iter) << ", prefetch hint: 0x" << (uint64_t)(&(*prefetch_iter)) << std::dec << std::endl;
       }
 #endif
       for (NodeID v : g.out_neigh(u)) {
@@ -106,6 +109,7 @@ int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
       }
     }
     lqueue.flush();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
   }
   return scout_count;
 }
@@ -116,6 +120,8 @@ int64_t TDStep(const Graph &g, pvector<NodeID> &parent,
   #pragma omp parallel
   {
     QueueBuffer<NodeID> lqueue(queue);
+    const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
     #pragma omp for reduction(+ : scout_count) nowait
     for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
       NodeID u = *q_iter;
@@ -145,6 +151,7 @@ int64_t TDStep(const Graph &g, pvector<NodeID> &parent,
       }
     }
     lqueue.flush();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
   }
   return scout_count;
 }
