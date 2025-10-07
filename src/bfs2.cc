@@ -75,6 +75,7 @@ them in parent array as negative numbers. Thus the encoding of parent is:
 
 using namespace std;
 uint64_t* UCPage = NULL;
+uint64_t* PerfPage = NULL;
 
 int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
                            SlidingQueue<NodeID> &queue, const uint64_t prefetch_distance) {
@@ -283,8 +284,11 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     pdev->sendJob(createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent));
 
     UCPage = (uint64_t*) pdev->getUCPagePtr(0);
-    std::cout << "UCPage: 0x" << std::hex<< (uint64_t)UCPage <<std::dec<< std::endl;
+    PerfPage = (uint64_t*) pdev->getPerfPagePtr();
+    std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
+    std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
     assert(UCPage != nullptr);
+    assert(PerfPage != nullptr);
 #endif
     #if ENABLE_GEM5==1
     m5_exit_addr(0);
