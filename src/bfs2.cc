@@ -214,6 +214,9 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     #if ENABLE_GEM5==1
       m5_exit_addr(0);
     #endif // ENABLE_GEM5
+    PerfPage = (uint64_t*) pdev->getPerfPagePtr();
+    std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
+    assert(PerfPage != nullptr);
     while (!queue.empty()) {
       edges_to_check -= scout_count;
       scout_count = TDStep(g, parent, queue, num_visited_edges, num_visited_nodes);
@@ -291,11 +294,8 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     pdev->sendJob(createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent));
 
     UCPage = (uint64_t*) pdev->getUCPagePtr(0);
-    PerfPage = (uint64_t*) pdev->getPerfPagePtr();
     std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
-    std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
     assert(UCPage != nullptr);
-    assert(PerfPage != nullptr);
 #endif
     #if ENABLE_GEM5==1
     m5_exit_addr(0);
