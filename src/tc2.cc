@@ -7,6 +7,7 @@
 #endif
 
 #include <algorithm>
+#include <cassert>
 #include <cinttypes>
 #include <iostream>
 #include <vector>
@@ -153,6 +154,7 @@ bool WorthRelabelling(const Graph &g) {
 
 // Uses heuristic to see if worth relabeling
 size_t DoTC(const Graph &g, int iter_num) {
+  size_t result = 0;
   if (iter_num == 0) { // ----- First iteration: warm up phase -----
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 1
@@ -165,7 +167,7 @@ size_t DoTC(const Graph &g, int iter_num) {
     assert(PerfPage != nullptr);
 
     // Main logic
-    OrderedCount(g);
+    result = OrderedCount(g);
 
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 2
@@ -181,27 +183,28 @@ size_t DoTC(const Graph &g, int iter_num) {
 #endif
     std::cout << "Use pdev: " << use_pdev << "; Prefetch distance: " << prefetch_distance << std::endl;
 
-    // TODO: set up pickle job
+    // Set up pickle job
 #if ENABLE_PICKLEDEVICE==1
-    auto job = createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent);
+    if (use_pdev == 1) {
+        PickleJob job(/*kernel_name*/"tc_kernel");
+        // We get the array descriptors from the graph. Note that the relation between the arrays here
+        // is already set up by the graph's constructor.
+        std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
+        out_index_array_descriptor->access_type = AccessType::Ranged;
+        out_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
+        job.addArrayDescriptor(out_index_array_descriptor);
+        std::shared_ptr<PickleArrayDescriptor> out_neighbors_array_descriptor = g.getOutNeighborsArrayDescriptor();
+        out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
+        out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
+        job.addArrayDescriptor(out_neighbors_array_descriptor);
+        job.print();
+        std::cout << "Sent job" << std::endl;
+        pdev->sendJob(job);
 
-    // ---
-    // We have to manually set the AccessType and AddressingMode as we currently
-    // do not have any mechanism to detect these values.
-    // outIndex P R
-    job.changeAccessTypeByArrayId(g.getOutIndexArrayDescriptor()->getArrayId(), AccessType::Ranged);
-    job.changeAddressingModeByArrayId(g.getOutIndexArrayDescriptor()->getArrayId(), AddressingMode::Pointer);
-    // outNeighbors I S
-    job.changeAccessTypeByArrayId(g.getOutNeighborsArrayDescriptor()->getArrayId(), AccessType::SingleElement);
-    job.changeAddressingModeByArrayId(g.getOutNeighborsArrayDescriptor()->getArrayId(), AddressingMode::Index);
-    // ---
-    job.print();
-    std::cout << "Sent job" << std::endl;
-    pdev->sendJob(createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent));
-
-    UCPage = (uint64_t*) pdev->getUCPagePtr(0);
-    std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
-    assert(UCPage != nullptr);
+        UCPage = (uint64_t*) pdev->getUCPagePtr(0);
+        std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
+        assert(UCPage != nullptr);
+    }
 #endif
 
     std::cout << "ROI Start" << std::endl;
@@ -209,15 +212,16 @@ size_t DoTC(const Graph &g, int iter_num) {
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
     if (use_pdev == 1) {
-      OrderedCountWithPrefetch(g);
+      result = OrderedCountWithPrefetch(g);
     } else {
-      OrderedCount(g);
+      result = OrderedCount(g);
     }
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 4
 #endif // ENABLE_GEM5
     std::cout << "ROI End" << std::endl;
   }
+  return result;
 }
 
 
