@@ -166,7 +166,7 @@ bool WorthRelabelling(const Graph &g) {
 size_t DoTC(const Graph &g, int iter_num) {
   size_t result = 0;
   if (iter_num == 0) { // ----- First iteration: warm up phase -----
-    std::cout << "ROI Start" << std::endl;
+    std::cout << "ROI Start" << std::endl; // ----- ROI Start -----
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 1
 #endif // ENABLE_GEM5
@@ -184,7 +184,7 @@ size_t DoTC(const Graph &g, int iter_num) {
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 2
 #endif // ENABLE_GEM5
-    std::cout << "ROI End" << std::endl;
+    std::cout << "ROI End" << std::endl; // ----- ROI End -----
   } else if (iter_num == 1) { // ----- Second iteration: measured phase -----
     uint64_t use_pdev = 0;
     uint64_t prefetch_distance = 0;
@@ -219,7 +219,7 @@ size_t DoTC(const Graph &g, int iter_num) {
     }
 #endif
 
-    std::cout << "ROI Start" << std::endl;
+    std::cout << "ROI Start" << std::endl; // ----- ROI Start -----
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
@@ -231,7 +231,7 @@ size_t DoTC(const Graph &g, int iter_num) {
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 4
 #endif // ENABLE_GEM5
-    std::cout << "ROI End" << std::endl;
+    std::cout << "ROI End" << std::endl; // ----- ROI End -----
   }
   return result;
 }
