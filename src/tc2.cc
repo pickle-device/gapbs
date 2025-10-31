@@ -78,8 +78,10 @@ size_t OrderedCount(const Graph &g) {
   size_t total = 0;
   #pragma omp parallel
   {
+#if ENABLE_PICKLEDEVICE==1
     const uint64_t thread_id = (uint64_t)omp_get_thread_num();
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
     //#pragma omp parallel for reduction(+ : total) schedule(dynamic, 64)
     #pragma omp parallel for reduction(+ : total) schedule(dynamic, 16384)
     for (NodeID u=0; u < g.num_nodes(); u++) {
@@ -97,7 +99,9 @@ size_t OrderedCount(const Graph &g) {
         }
       }
     }
+#if ENABLE_PICKLEDEVICE==1
     PerfPage[thread_id] = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
   }
   return total;
 }
@@ -106,8 +110,10 @@ size_t OrderedCountWithPrefetch(const Graph &g) {
   size_t total = 0;
   #pragma omp parallel
   {
+#if ENABLE_PICKLEDEVICE==1
     const uint64_t thread_id = (uint64_t)omp_get_thread_num();
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
     //#pragma omp parallel for reduction(+ : total) schedule(dynamic, 64)
     #pragma omp parallel for reduction(+ : total) schedule(dynamic, 16384)
     for (NodeID u=0; u < g.num_nodes(); u++) {
@@ -126,7 +132,9 @@ size_t OrderedCountWithPrefetch(const Graph &g) {
         }
       }
     }
+#if ENABLE_PICKLEDEVICE==1
     PerfPage[thread_id] = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
   }
   return total;
 }
@@ -161,10 +169,12 @@ size_t DoTC(const Graph &g, int iter_num) {
 #endif // ENABLE_GEM5
     std::cout << "ROI Start" << std::endl;
 
+#if ENABLE_PICKLEDEVICE==1
     // Set up PerfPage
     PerfPage = (uint64_t*) pdev->getPerfPagePtr();
     std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
     assert(PerfPage != nullptr);
+#endif
 
     // Main logic
     result = OrderedCount(g);
