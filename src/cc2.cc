@@ -288,6 +288,7 @@ pvector<NodeID> DoCC(const Graph &g, int iter_num) {
         result_array_descriptor->access_type = AccessType::SingleElement;
         result_array_descriptor->addressing_mode = AddressingMode::Index;
         out_neighbors_array_descriptor->dst_indexing_array_id = result_array_descriptor->getArrayId();
+        job.addArrayDescriptor(result_array_descriptor);
         // Done
         job.print();
         std::cout << "Sent job" << std::endl;
