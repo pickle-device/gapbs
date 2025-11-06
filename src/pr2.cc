@@ -1,7 +1,13 @@
 // Copyright (c) 2015, The Regents of the University of California (Regents)
 // See LICENSE.txt for license details
 
+#ifdef _OPENMP
+  #define _GLIBCXX_PARALLEL
+#endif
+
 #include <algorithm>
+#include <cassert>
+#include <cinttypes>
 #include <iostream>
 #include <vector>
 
@@ -204,6 +210,27 @@ pvector<ScoreT> DoPR(const Graph& g, int trial_num) {
 #if ENABLE_PICKLEDEVICE==1
     if (use_pdev == 1) {
         PickleJob job(/*kernel_name*/"pr_kernel");
+        // We get the array descriptors from the graph. Note that the relation between the arrays here
+        // is already set up by the graph's constructor.
+        std::shared_ptr<PickleArrayDescriptor> in_index_array_descriptor = g.getInIndexArrayDescriptor();
+        in_index_array_descriptor->access_type = AccessType::Ranged;
+        in_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
+        job.addArrayDescriptor(in_index_array_descriptor);
+        std::shared_ptr<PickleArrayDescriptor> in_neighbors_array_descriptor = g.getInNeighborsArrayDescriptor();
+        in_neighbors_array_descriptor->access_type = AccessType::SingleElement;
+        in_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
+        job.addArrayDescriptor(in_neighbors_array_descriptor);
+        // We need to add the scores and outgoing_contrib arrays as well
+        std::shared_ptr<PickleArrayDescriptor> scores_array_descriptor = scores.getArrayDescriptor();
+        scores_array_descriptor->access_type = AccessType::SingleElement;
+        scores_array_descriptor->addressing_mode = AddressingMode::Index;
+        in_neighbors_array_descriptor->dst_indexing_array_id = scores_array_descriptor->getArrayId();
+        job.addArrayDescriptor(scores_array_descriptor);
+        std::shared_ptr<PickleArrayDescriptor> outgoing_contrib_array_descriptor = outgoing_contrib.getArrayDescriptor();
+        outgoing_contrib_array_descriptor->access_type = AccessType::SingleElement;
+        outgoing_contrib_array_descriptor->addressing_mode = AddressingMode::Index;
+        // we currently do not have a way to add 2 destinations per array so we need to fix this
+        job.addArrayDescriptor(outgoing_contrib_array_descriptor);
         job.print();
         std::cout << "Sent job" << std::endl;
         pdev->sendJob(job);
