@@ -78,8 +78,8 @@ const int MAX_SV_NUM_ITERS = 1;
 // The hooking condition (comp_u < comp_v) may not coincide with the edge's
 // direction, so we use a min-max swap such that lower component IDs propagate
 // independent of the edge's direction.
-pvector<NodeID> ShiloachVishkin(const Graph &g, const int max_iters) {
-  pvector<NodeID> comp(g.num_nodes());
+
+void ShiloachVishkin(const Graph &g, const int max_iters, pvector<NodeID>& comp) {
   #pragma omp parallel for
   for (NodeID n=0; n < g.num_nodes(); n++) {
     comp[n] = n;
@@ -122,11 +122,9 @@ pvector<NodeID> ShiloachVishkin(const Graph &g, const int max_iters) {
     }
   }
   cout << "Shiloach-Vishkin took " << num_iter << " iterations" << endl;
-  return comp;
 }
 
-pvector<NodeID> ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters) {
-  pvector<NodeID> comp(g.num_nodes());
+void ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters, pvector<NodeID>& comp) {
   #pragma omp parallel for
   for (NodeID n=0; n < g.num_nodes(); n++) {
     comp[n] = n;
@@ -172,7 +170,6 @@ pvector<NodeID> ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters)
     }
   }
   cout << "Shiloach-Vishkin took " << num_iter << " iterations" << endl;
-  return comp;
 }
 
 
@@ -242,7 +239,7 @@ bool CCVerifier(const Graph &g, const pvector<NodeID> &comp) {
 }
 
 pvector<NodeID> DoCC(const Graph &g, int iter_num) {
-  pvector<NodeID> result;
+  pvector<NodeID> result(g.num_nodes());
   if (iter_num == 0) { // ----- First iteration: warm up phase -----
     std::cout << "ROI Start" << std::endl; // ----- ROI Start -----
 #if ENABLE_GEM5==1
@@ -255,7 +252,7 @@ pvector<NodeID> DoCC(const Graph &g, int iter_num) {
     std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
     assert(PerfPage != nullptr);
 #endif
-    result = ShiloachVishkin(g, MAX_SV_NUM_ITERS);
+    ShiloachVishkin(g, MAX_SV_NUM_ITERS, result);
 
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 2
@@ -275,7 +272,7 @@ pvector<NodeID> DoCC(const Graph &g, int iter_num) {
     // Set up pickle job
 #if ENABLE_PICKLEDEVICE==1
     if (use_pdev == 1) {
-        PickleJob job(/*kernel_name*/"tc_kernel");
+        PickleJob job(/*kernel_name*/"cc_kernel");
         // We get the array descriptors from the graph. Note that the relation between the arrays here
         // is already set up by the graph's constructor.
         std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
@@ -286,6 +283,12 @@ pvector<NodeID> DoCC(const Graph &g, int iter_num) {
         out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
         out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
         job.addArrayDescriptor(out_neighbors_array_descriptor);
+        // We add the result array descriptor
+        auto result_array_descriptor = result.getArrayDescriptor();
+        result_array_descriptor->access_type = AccessType::SingleElement;
+        result_array_descriptor->addressing_mode = AddressingMode::Index;
+        out_neighbors_array_descriptor->dst_indexing_array_id = result_array_descriptor->getArrayId();
+        // Done
         job.print();
         std::cout << "Sent job" << std::endl;
         pdev->sendJob(job);
@@ -301,9 +304,9 @@ pvector<NodeID> DoCC(const Graph &g, int iter_num) {
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
     if (use_pdev == 1) {
-        result = ShiloachVishkinWithPrefetch(g, MAX_SV_NUM_ITERS);
+        ShiloachVishkinWithPrefetch(g, MAX_SV_NUM_ITERS, result);
     } else {
-        result = ShiloachVishkin(g, MAX_SV_NUM_ITERS);
+        ShiloachVishkin(g, MAX_SV_NUM_ITERS, result);
     }
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 4
