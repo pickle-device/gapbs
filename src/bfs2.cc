@@ -195,7 +195,7 @@ pvector<NodeID> InitParent(const Graph &g) {
   return parent;
 }
 
-pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
+pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
                       int alpha = 15, int beta = 18) {
   PrintStep("Source", static_cast<int64_t>(source));
 
@@ -212,13 +212,13 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
   int64_t edges_to_check = g.num_edges_directed();
   int64_t scout_count = g.out_degree(source);
 
-  std::cout << "Trial " << iter_num+1 << std::endl;
+  std::cout << "Trial " << trial_num+1 << std::endl;
 
   uint64_t num_visited_edges = 0;
   uint64_t num_visited_nodes = 0;
 
-  // Iter 0
-  if (iter_num == 0) {
+  // Trial 0
+  if (trial_num == 0) {
     #if ENABLE_GEM5==1
       m5_exit_addr(0);
     #endif // ENABLE_GEM5
@@ -243,8 +243,8 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     for (NodeID n = 0; n < g.num_nodes(); n++)
       if (parent[n] < -1)
         parent[n] = -1;
-    //std::cout << "Trial " << iter_num+1 << " finished" << std::endl;
-    std::cout << "Trial " << iter_num+1 << " finished; scout_count = " << scout_count << std::endl;
+    //std::cout << "Trial " << trial_num+1 << " finished" << std::endl;
+    std::cout << "Trial " << trial_num+1 << " finished; scout_count = " << scout_count << std::endl;
     return parent;
   }
   // Iter 1
@@ -275,7 +275,7 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     for (NodeID n = 0; n < g.num_nodes(); n++)
       if (parent[n] < -1)
         parent[n] = -1;
-    //std::cout << "Trial " << iter_num+1 << " finished; scout_count = " << scout_count << std::endl;
+    //std::cout << "Trial " << trial_num+1 << " finished; scout_count = " << scout_count << std::endl;
     return parent;
   } else {
     // Write dynamic info per run, ie., memory address of structures
@@ -321,7 +321,7 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     #if CHECK_NUM_EDGES==1
     std::cout << "Number of visited edges: " << num_visited_edges << std::endl;
     #endif
-    std::cout << "Trial " << iter_num+1 << " finished; scout_count = " << scout_count << std::endl;
+    std::cout << "Trial " << trial_num+1 << " finished; scout_count = " << scout_count << std::endl;
     std::cout << "ROI End" << std::endl;
     #if ENABLE_GEM5==1
     m5_exit_addr(0);
@@ -419,7 +419,7 @@ int main(int argc, char* argv[]) {
   Graph g = b.MakeGraph();
   //g.printGraph();
   SourcePicker<Graph> sp(g, cli.start_vertex());
-  auto BFSBound = [&sp] (const Graph &g, const int& iter_num) { return DOBFS(g, sp.PickNext(), iter_num); };
+  auto BFSBound = [&sp] (const Graph &g, const int& trial_num) { return DOBFS(g, sp.PickNext(), trial_num); };
   SourcePicker<Graph> vsp(g, cli.start_vertex());
   auto VerifierBound = [&vsp] (const Graph &g, const pvector<NodeID> &parent) {
     return BFSVerifier(g, vsp.PickNext(), parent);

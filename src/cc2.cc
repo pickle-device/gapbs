@@ -238,9 +238,9 @@ bool CCVerifier(const Graph &g, const pvector<NodeID> &comp) {
   return true;
 }
 
-pvector<NodeID> DoCC(const Graph &g, int iter_num) {
+pvector<NodeID> DoCC(const Graph &g, int trial_num) {
   pvector<NodeID> result(g.num_nodes());
-  if (iter_num == 0) { // ----- First iteration: warm up phase -----
+  if (trial_num == 0) { // ----- First trial: warm up phase -----
     std::cout << "ROI Start" << std::endl; // ----- ROI Start -----
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 1
@@ -258,7 +258,7 @@ pvector<NodeID> DoCC(const Graph &g, int iter_num) {
     m5_exit_addr(0); // exit 2
 #endif // ENABLE_GEM5
     std::cout << "ROI End" << std::endl; // ----- ROI End -----
-  } else if (iter_num == 1) { // ----- Second iteration: measured phase -----
+  } else if (trial_num == 1) { // ----- Second trial: measured phase -----
     // Read device specs
     uint64_t use_pdev = 0;
     uint64_t prefetch_distance = 0;
