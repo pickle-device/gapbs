@@ -100,7 +100,7 @@ size_t OrderedCount(const Graph &g) {
       }
     }
 #if ENABLE_PICKLEDEVICE==1
-    PerfPage[thread_id] = (thread_id << 1) | PERF_THREAD_COMPLETE;
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
 #endif
   }
   return total;
@@ -135,7 +135,7 @@ size_t OrderedCountWithPrefetch(const Graph &g) {
       }
     }
 #if ENABLE_PICKLEDEVICE==1
-    PerfPage[thread_id] = (thread_id << 1) | PERF_THREAD_COMPLETE;
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
 #endif
   }
   return total;

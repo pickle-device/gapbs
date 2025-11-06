@@ -43,7 +43,7 @@
 #include "m5_mmap.h"
 #endif // ENABLE_GEM5
 
-#if ENABLE_PICKLEDEVICE
+#if ENABLE_PICKLEDEVICE==1
 std::unique_ptr<PickleDeviceManager> pdev(new PickleDeviceManager());
 #endif
 
@@ -86,8 +86,10 @@ int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
   #pragma omp parallel
   {
     QueueBuffer<NodeID> lqueue(queue);
+#if ENABLE_PICKLEDEVICE==1
     const uint64_t thread_id = (uint64_t)omp_get_thread_num();
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
     #pragma omp for reduction(+ : scout_count) nowait
     for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
       NodeID u = *q_iter;
@@ -109,7 +111,9 @@ int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
       }
     }
     lqueue.flush();
+#if ENABLE_PICKLEDEVICE==1
     *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
   }
   return scout_count;
 }
@@ -120,8 +124,10 @@ int64_t TDStep(const Graph &g, pvector<NodeID> &parent,
   #pragma omp parallel
   {
     QueueBuffer<NodeID> lqueue(queue);
+#if ENABLE_PICKLEDEVICE==1
     const uint64_t thread_id = (uint64_t)omp_get_thread_num();
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
     #pragma omp for reduction(+ : scout_count) nowait
     for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
       NodeID u = *q_iter;
@@ -151,7 +157,9 @@ int64_t TDStep(const Graph &g, pvector<NodeID> &parent,
       }
     }
     lqueue.flush();
+#if ENABLE_PICKLEDEVICE==1
     *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
   }
   return scout_count;
 }
@@ -214,9 +222,11 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int iter_num,
     #if ENABLE_GEM5==1
       m5_exit_addr(0);
     #endif // ENABLE_GEM5
+    #if ENABLE_PICKLEDEVICE==1
     PerfPage = (uint64_t*) pdev->getPerfPagePtr();
     std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
     assert(PerfPage != nullptr);
+    #endif
     while (!queue.empty()) {
       edges_to_check -= scout_count;
       scout_count = TDStep(g, parent, queue, num_visited_edges, num_visited_nodes);

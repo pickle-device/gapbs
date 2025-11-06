@@ -73,7 +73,7 @@ const uint64_t PERF_THREAD_COMPLETE = 1;
 
 // The maximum number of iterations of the Shiloach-Vishkin algorithm.
 // This is to constraint simulation time.
-const int MAX_SV_NUM_ITERS = 2;
+const int MAX_SV_NUM_ITERS = 1;
 
 // The hooking condition (comp_u < comp_v) may not coincide with the edge's
 // direction, so we use a min-max swap such that lower component IDs propagate
@@ -111,7 +111,7 @@ pvector<NodeID> ShiloachVishkin(const Graph &g, const int max_iters) {
         }
       }
 #if ENABLE_PICKLEDEVICE==1
-      PerfPage[thread_id] = (thread_id << 1) | PERF_THREAD_COMPLETE;
+      *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
 #endif
     }
     #pragma omp parallel for
@@ -161,7 +161,7 @@ pvector<NodeID> ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters)
         }
       }
 #if ENABLE_PICKLEDEVICE==1
-    PerfPage[thread_id] = (thread_id << 1) | PERF_THREAD_COMPLETE;
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
 #endif
     }
     #pragma omp parallel for
