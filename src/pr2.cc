@@ -77,7 +77,7 @@ void PageRankPullGS(
       const uint64_t thread_id = (uint64_t)omp_get_thread_num();
       *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
-      #pragma omp parallel for reduction(+ : error) schedule(dynamic, 16384)
+      #pragma omp for reduction(+ : error) schedule(dynamic, 16384)
       for (NodeID u=0; u < g.num_nodes(); u++) {
         ScoreT incoming_total = 0;
         for (NodeID v : g.in_neigh(u))
@@ -115,7 +115,7 @@ void PageRankPullGSWithPrefetch(
       const uint64_t thread_id = (uint64_t)omp_get_thread_num();
       *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
-      #pragma omp parallel for reduction(+ : error) schedule(dynamic, 16384)
+      #pragma omp for reduction(+ : error) schedule(dynamic, 16384)
       for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
         *UCPage = (uint64_t)(u);

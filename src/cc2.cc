@@ -95,7 +95,7 @@ void ShiloachVishkin(const Graph &g, const int max_iters, pvector<NodeID>& comp)
       const uint64_t thread_id = (uint64_t)omp_get_thread_num();
       *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
-      #pragma omp parallel for
+      #pragma omp for
       for (NodeID u=0; u < g.num_nodes(); u++) {
         for (NodeID v : g.out_neigh(u)) {
           NodeID comp_u = comp[u];
@@ -140,7 +140,7 @@ void ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters, pvector<No
       const uint64_t thread_id = (uint64_t)omp_get_thread_num();
       *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
-      #pragma omp parallel for
+      #pragma omp for
       for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
         *UCPage = (uint64_t)(u);

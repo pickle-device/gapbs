@@ -83,7 +83,7 @@ size_t OrderedCount(const Graph &g) {
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
     //#pragma omp parallel for reduction(+ : total) schedule(dynamic, 64)
-    #pragma omp parallel for reduction(+ : total) schedule(dynamic, 16384)
+    #pragma omp for reduction(+ : total) schedule(dynamic, 16384)
     for (NodeID u=0; u < g.num_nodes(); u++) {
       for (NodeID v : g.out_neigh(u)) {
         if (v > u)
@@ -115,7 +115,7 @@ size_t OrderedCountWithPrefetch(const Graph &g) {
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
     //#pragma omp parallel for reduction(+ : total) schedule(dynamic, 64)
-    #pragma omp parallel for reduction(+ : total) schedule(dynamic, 16384)
+    #pragma omp for reduction(+ : total) schedule(dynamic, 16384)
     for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
       *UCPage = (uint64_t)(u);
