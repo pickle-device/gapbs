@@ -124,7 +124,9 @@ void ShiloachVishkin(const Graph &g, const int max_iters, pvector<NodeID>& comp)
   cout << "Shiloach-Vishkin took " << num_iter << " iterations" << endl;
 }
 
-void ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters, pvector<NodeID>& comp) {
+void ShiloachVishkinWithPrefetch(
+  const Graph &g, const int max_iters, pvector<NodeID>& comp
+) {
   #pragma omp parallel for
   for (NodeID n=0; n < g.num_nodes(); n++) {
     comp[n] = n;
@@ -144,6 +146,59 @@ void ShiloachVishkinWithPrefetch(const Graph &g, const int max_iters, pvector<No
       for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
         *UCPage = (uint64_t)(u);
+#endif
+        for (NodeID v : g.out_neigh(u)) {
+          NodeID comp_u = comp[u];
+          NodeID comp_v = comp[v];
+          if (comp_u == comp_v) continue;
+          // Hooking condition so lower component ID wins independent of direction
+          NodeID high_comp = comp_u > comp_v ? comp_u : comp_v;
+          NodeID low_comp = comp_u + (comp_v - high_comp);
+          if (high_comp == comp[high_comp]) {
+            change = true;
+            comp[high_comp] = low_comp;
+          }
+        }
+      }
+#if ENABLE_PICKLEDEVICE==1
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
+    }
+    #pragma omp parallel for
+    for (NodeID n=0; n < g.num_nodes(); n++) {
+      while (comp[n] != comp[comp[n]]) {
+        comp[n] = comp[comp[n]];
+      }
+    }
+  }
+  cout << "Shiloach-Vishkin took " << num_iter << " iterations" << endl;
+}
+
+void ShiloachVishkinWithPrefetchBulkMode(
+  const Graph &g, const int max_iters, pvector<NodeID>& comp,
+  const uint64_t bulk_mode_chunk_size
+) {
+  #pragma omp parallel for
+  for (NodeID n=0; n < g.num_nodes(); n++) {
+    comp[n] = n;
+  }
+  bool change = true;
+  int num_iter = 0;
+  while (change && (num_iter < max_iters)) {
+    change = false;
+    num_iter++;
+    #pragma omp parallel
+    {
+#if ENABLE_PICKLEDEVICE==1
+      const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+      *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+      #pragma omp for schedule(dynamic, bulk_mode_chunk_size)
+      for (NodeID u=0; u < g.num_nodes(); u++) {
+#if ENABLE_PICKLEDEVICE==1
+        if (u % bulk_mode_chunk_size == 0) {
+            *UCPage = (uint64_t)(u);
+        }
 #endif
         for (NodeID v : g.out_neigh(u)) {
           NodeID comp_u = comp[u];
@@ -262,13 +317,20 @@ pvector<NodeID> DoCC(const Graph &g, int trial_num) {
     // Read device specs
     uint64_t use_pdev = 0;
     uint64_t prefetch_distance = 0;
+    PrefetchMode prefetch_mode = PrefetchMode::UNKNOWN;
+    uint64_t bulk_mode_chunk_size = 0;
 #if ENABLE_PICKLEDEVICE==1
     PickleDevicePrefetcherSpecs specs = pdev->getDevicePrefetcherSpecs();
     use_pdev = specs.availability;
     prefetch_distance = specs.prefetch_distance;
+    prefetch_mode = specs.prefetch_mode;
+    bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
 #endif
-    std::cout << "Use pdev: " << use_pdev << "; Prefetch distance: " << prefetch_distance << std::endl;
-
+    std::cout << "Device specs: " << std::endl;
+    std::cout << "  . Use pdev: " << use_pdev << std::endl;
+    std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
+    std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
+    std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
     // Set up pickle job
 #if ENABLE_PICKLEDEVICE==1
     if (use_pdev == 1) {
@@ -305,7 +367,15 @@ pvector<NodeID> DoCC(const Graph &g, int trial_num) {
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
     if (use_pdev == 1) {
-        ShiloachVishkinWithPrefetch(g, MAX_SV_NUM_ITERS, result);
+        if (prefetch_mode == PrefetchMode::SINGLE_PREFETCH) {
+            ShiloachVishkinWithPrefetch(g, MAX_SV_NUM_ITERS, result);
+        } else if (prefetch_mode == PrefetchMode::BULK_PREFETCH) {
+            ShiloachVishkinWithPrefetchBulkMode(
+                g, MAX_SV_NUM_ITERS, result, bulk_mode_chunk_size
+            );
+        } else {
+            std::cerr << "Unknown prefetch mode" << std::endl;
+        }
     } else {
         ShiloachVishkin(g, MAX_SV_NUM_ITERS, result);
     }
