@@ -68,8 +68,8 @@ graph, we use the heuristic in WorthRelabelling.
 
 using namespace std;
 
-uint64_t* UCPage = NULL;
-uint64_t* PerfPage = NULL;
+volatile uint64_t* UCPage = NULL;
+volatile uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
 const uint64_t PERF_THREAD_COMPLETE = 1;
