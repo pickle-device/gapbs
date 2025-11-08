@@ -250,12 +250,20 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
   // Iter 1
   uint64_t use_pdev = 0;
   uint64_t prefetch_distance = 0;
+  PrefetchMode prefetch_mode = PrefetchMode::UNKNOWN;
+  uint64_t bulk_mode_chunk_size = 0;
 #if ENABLE_PICKLEDEVICE==1
   PickleDevicePrefetcherSpecs specs = pdev->getDevicePrefetcherSpecs();
   use_pdev = specs.availability;
   prefetch_distance = specs.prefetch_distance;
+  prefetch_mode = specs.prefetch_mode;
+  bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
 #endif
-  std::cout << "Use pdev: " << use_pdev << "; Prefetch distance: " << prefetch_distance << std::endl;
+  std::cout << "Device specs: " << std::endl;
+  std::cout << "  . Use pdev: " << use_pdev << std::endl;
+  std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
+  std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
+  std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
 
   if (use_pdev == 0) {
     #if ENABLE_GEM5==1
