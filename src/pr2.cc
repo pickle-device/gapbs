@@ -100,8 +100,14 @@ void PageRankPullGS(
 
 // Do 1 iteration of PR using GS method with prefetcher
 void PageRankPullGSWithPrefetch(
-  const Graph &g, pvector<ScoreT>& scores, pvector<ScoreT>& outgoing_contrib
+  const Graph &g, pvector<ScoreT>& scores, pvector<ScoreT>& outgoing_contrib,
+  const PrefetchMode prefetch_mode, const uint64_t bulk_mode_chunk_size
 ) {
+  const uint64_t chunk_size = \
+    (prefetch_mode == PrefetchMode::BULK_PREFETCH) ? bulk_mode_chunk_size : 16384;
+  // If u is divisible by prefetch_trigger_mode, we send a prefetch hint
+  const uint64_t prefetch_trigger_modulo = \
+    (prefetch_mode == PrefetchMode::BULK_PREFETCH) ? bulk_mode_chunk_size : 1;
   const ScoreT init_score = 1.0f / g.num_nodes();
   const ScoreT base_score = (1.0f - kDamp) / g.num_nodes();
   #pragma omp parallel for
@@ -115,10 +121,12 @@ void PageRankPullGSWithPrefetch(
       const uint64_t thread_id = (uint64_t)omp_get_thread_num();
       *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
-      #pragma omp for reduction(+ : error) schedule(dynamic, 16384)
+      #pragma omp for reduction(+ : error) schedule(dynamic, chunk_size)
       for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
-        *UCPage = (uint64_t)(u);
+        if (u % prefetch_trigger_modulo == 0) {
+          *UCPage = (uint64_t)(u);
+        }
 #endif
         ScoreT incoming_total = 0;
         for (NodeID v : g.in_neigh(u))
@@ -200,12 +208,21 @@ pvector<ScoreT> DoPR(const Graph& g, int trial_num) {
     // Read device specs
     uint64_t use_pdev = 0;
     uint64_t prefetch_distance = 0;
-#if ENABLE_PICKLEDEVICE==1
+    PrefetchMode prefetch_mode = PrefetchMode::UNKNOWN;
+    uint64_t bulk_mode_chunk_size = 0;
+#if ENABLE_PICKLEDEVICE==1    
     PickleDevicePrefetcherSpecs specs = pdev->getDevicePrefetcherSpecs();
     use_pdev = specs.availability;
     prefetch_distance = specs.prefetch_distance;
-#endif
-    std::cout << "Use pdev: " << use_pdev << "; Prefetch distance: " << prefetch_distance << std::endl;
+    prefetch_mode = specs.prefetch_mode;
+    bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
+#endif                        
+    std::cout << "Device specs: " << std::endl;
+    std::cout << "  . Use pdev: " << use_pdev << std::endl;
+    std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
+    std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
+    std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
+
     // Set up pickle job
 #if ENABLE_PICKLEDEVICE==1
     if (use_pdev == 1) {
@@ -245,7 +262,9 @@ pvector<ScoreT> DoPR(const Graph& g, int trial_num) {
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
     if (use_pdev == 1) {
-        PageRankPullGSWithPrefetch(g, scores, outgoing_contrib);;
+        PageRankPullGSWithPrefetch(
+            g, scores, outgoing_contrib, prefetch_mode, bulk_mode_chunk_size
+        );
     } else {
         PageRankPullGS(g, scores, outgoing_contrib);;
     }
