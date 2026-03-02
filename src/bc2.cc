@@ -1,21 +1,38 @@
 // Copyright (c) 2015, The Regents of the University of California (Regents)
 // See LICENSE.txt for license details
 
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <vector>
+
+#if ENABLE_PICKLEDEVICE==1
+#pragma message("Compiling with Pickle device")
+#include "pickle_graph.h"
+#else
+#pragma message("NOT compiling with Pickle device")
+#include "graph.h"
+#include "pvector.h"
+#include "sliding_queue.h"
+#endif
 
 #include "benchmark.h"
 #include "bitmap.h"
 #include "builder.h"
 #include "command_line.h"
-#include "graph.h"
 #include "platform_atomics.h"
-#include "pvector.h"
-#include "sliding_queue.h"
 #include "timer.h"
 #include "util.h"
 
+#if ENABLE_GEM5==1
+#pragma message("Compiling with gem5 instructions")
+#include <gem5/m5ops.h>
+#include "m5_mmap.h"
+#endif // ENABLE_GEM5
+
+#if ENABLE_PICKLEDEVICE==1
+std::unique_ptr<PickleDeviceManager> pdev(new PickleDeviceManager());
+#endif
 
 /*
 GAP Benchmark Suite
