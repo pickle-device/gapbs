@@ -201,8 +201,8 @@ int main(int argc, char* argv[]) {
   WeightedBuilder b(cli);
   WGraph g = b.MakeGraph();
   SourcePicker<WGraph> sp(g, cli.start_vertex());
-  auto SSSPBound = [&sp, &cli] (const WGraph &g) {
-    return DeltaStep(g, sp.PickNext(), cli.delta(), cli.logging_en());
+  auto SSSPBound = [&sp, &cli] (const WGraph &g, int trial_num) {
+    return DeltaStep(g, sp.PickNext(), cli.delta());
   };
   SourcePicker<WGraph> vsp(g, cli.start_vertex());
   auto VerifierBound = [&vsp] (const WGraph &g, const pvector<WeightT> &dist) {

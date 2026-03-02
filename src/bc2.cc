@@ -239,8 +239,8 @@ int main(int argc, char* argv[]) {
   Builder b(cli);
   Graph g = b.MakeGraph();
   SourcePicker<Graph> sp(g, cli.start_vertex());
-  auto BCBound = [&sp, &cli] (const Graph &g) {
-    return Brandes(g, sp, cli.num_iters(), cli.logging_en());
+  auto BCBound = [&sp, &cli] (const Graph &g, int trial_num) {
+    return Brandes(g, sp, cli.num_iters());
   };
   SourcePicker<Graph> vsp(g, cli.start_vertex());
   auto VerifierBound = [&vsp, &cli] (const Graph &g,
