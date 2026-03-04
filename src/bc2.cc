@@ -188,6 +188,15 @@ void PBFSWithPrefetch(const Graph &g, NodeID source, pvector<NodeID>& depths,
 pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
                         NodeID num_iters, uint64_t trial_num,
                         bool logging_enabled = false) {
+
+  pvector<ScoreT> scores(g.num_nodes(), -1);
+  pvector<CountT> path_counts(g.num_nodes());
+  Bitmap succ(g.num_edges_directed());
+  vector<SlidingQueue<NodeID>::iterator> depth_index;
+  SlidingQueue<NodeID> queue(g.num_nodes());
+  pvector<NodeID> depths(g.num_nodes(), -1);
+  pvector<ScoreT> deltas(g.num_nodes(), 0);
+
   /* Determine if we use Pickle prefetcher */
   uint64_t use_pdev = 0;
   uint64_t prefetch_distance = 0;
@@ -210,8 +219,100 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
     std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
 #if ENABLE_PICKLEDEVICE==1
     if (use_pdev == 1) {
-        PickleJob job(/*kernel_name*/"bc_kernel");
-        // TODO
+        // kernel_1: queue -> out_neigh_ptr -> out_neigh -> depths & path_counts
+        // kernel_2: depth_index[d] -> out_neigh_ptr -> out_neigh -> path_counts & deltas
+        //           depth_index[d] -> scores
+        {
+          PickleJob job(/*kernel_name*/"bc_kernel_1");
+          std::shared_ptr<PickleArrayDescriptor> queue_array_descriptor = queue.getArrayDescriptor();
+          queue_array_descriptor->name = "queue";
+          queue_array_descriptor->access_type = AccessType::SingleElement;
+          queue_array_descriptor->addressing_mode = AddressingMode::Index;
+          job.addArrayDescriptor(queue_array_descriptor);
+          // We get the array descriptors from the graph. Note that the relation between the arrays here
+          // is already set up by the graph's constructor.
+          std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
+          out_index_array_descriptor->name = "out_index";
+          out_index_array_descriptor->access_type = AccessType::Ranged;
+          out_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
+          queue_array_descriptor->dst_indexing_array_id = out_index_array_descriptor->getArrayId();
+          job.addArrayDescriptor(out_index_array_descriptor);
+          std::shared_ptr<PickleArrayDescriptor> out_neighbors_array_descriptor = g.getOutNeighborsArrayDescriptor();
+          out_neighbors_array_descriptor->name = "out_neighbors";
+          out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
+          out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
+          job.addArrayDescriptor(out_neighbors_array_descriptor);
+          // Add the `depths` array descriptor
+          auto depths_array_descriptor = depths.getArrayDescriptor();
+          depths_array_descriptor->name = "depths";
+          depths_array_descriptor->access_type = AccessType::SingleElement;
+          depths_array_descriptor->addressing_mode = AddressingMode::Index;
+          out_neighbors_array_descriptor->dst_indexing_array_id = depths_array_descriptor->getArrayId();
+          job.addArrayDescriptor(depths_array_descriptor);
+          // Add the `path_counts` array descriptor
+          auto path_counts_array_descriptor = path_counts.getArrayDescriptor();
+          path_counts_array_descriptor->name = "path_counts";
+          path_counts_array_descriptor->access_type = AccessType::SingleElement;
+          path_counts_array_descriptor->addressing_mode = AddressingMode::Index;
+          out_neighbors_array_descriptor->dst_indexing_array_id = path_counts_array_descriptor->getArrayId(); // TODO: add support for multiple destination
+          job.addArrayDescriptor(path_counts_array_descriptor);
+          job.print();
+          pdev->sendJob(job);
+          std::cout << "Sent kernel_1" << std::endl;
+        }
+        {
+          PickleJob job(/*kernel_name*/"bc_kernel_2");
+          // For the depth_index, it's a vector of iterators where the iterators are added during the run time.
+          // For prefetching, this is the first layer of indirection, and we don't actually need to know the base
+          // address each iterator as we send the address of the current_node and we guarantee that the address of
+          // the current_node + prefetch_distance * node_size is available. So, we'll just place a dummy value for
+          // the base address.
+          std::shared_ptr<PickleArrayDescriptor> depth_index_array_descriptor(new PickleArrayDescriptor());
+          depth_index_array_descriptor->name = "depth_index_iterator";
+          depth_index_array_descriptor->vaddr_start = 0;
+          depth_index_array_descriptor->vaddr_end = 0;
+          depth_index_array_descriptor->element_size = sizeof(NodeID);
+          depth_index_array_descriptor->access_type = AccessType::SingleElement;
+          depth_index_array_descriptor->addressing_mode = AddressingMode::Index;
+          job.addArrayDescriptor(depth_index_array_descriptor);
+          // We get the array descriptors from the graph. Note that the relation between the arrays here
+          // is already set up by the graph's constructor.
+          std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
+          out_index_array_descriptor->name = "out_index";
+          out_index_array_descriptor->access_type = AccessType::Ranged;
+          out_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
+          depth_index_array_descriptor->dst_indexing_array_id = out_index_array_descriptor->getArrayId();
+          job.addArrayDescriptor(out_index_array_descriptor);
+          std::shared_ptr<PickleArrayDescriptor> out_neighbors_array_descriptor = g.getOutNeighborsArrayDescriptor();
+          out_neighbors_array_descriptor->name = "out_neighbors";
+          out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
+          out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
+          job.addArrayDescriptor(out_neighbors_array_descriptor);
+          // Add the `path_counts` array descriptor
+          auto path_counts_array_descriptor = path_counts.getArrayDescriptor();
+          path_counts_array_descriptor->name = "path_counts";
+          path_counts_array_descriptor->access_type = AccessType::SingleElement;
+          path_counts_array_descriptor->addressing_mode = AddressingMode::Index;
+          out_neighbors_array_descriptor->dst_indexing_array_id = path_counts_array_descriptor->getArrayId();
+          // Add the `deltas` array descriptor
+          auto deltas_array_descriptor = deltas.getArrayDescriptor();
+          deltas_array_descriptor->name = "deltas";
+          deltas_array_descriptor->access_type = AccessType::SingleElement;
+          deltas_array_descriptor->addressing_mode = AddressingMode::Index;
+          out_neighbors_array_descriptor->dst_indexing_array_id = deltas_array_descriptor->getArrayId(); // TODO: add support for multiple destination
+          job.addArrayDescriptor(deltas_array_descriptor);
+          // Add the `scores` array descriptor
+          auto scores_array_descriptor = scores.getArrayDescriptor();
+          scores_array_descriptor->name = "scores";
+          scores_array_descriptor->access_type = AccessType::SingleElement;
+          scores_array_descriptor->addressing_mode = AddressingMode::Index;
+          //out_neighbors_array_descriptor->dst_indexing_array_id = scores_array_descriptor->getArrayId(); // TODO: add support for multiple destination
+          job.addArrayDescriptor(scores_array_descriptor);
+          job.print();
+          std::cout << "Sent kernel_2" << std::endl;
+          pdev->sendJob(job);
+        }
+        // Create communication page
         UCPage = (uint64_t*) pdev->getUCPagePtr(0);
         UCPage_Kernel2 = UCPage + 1;
         std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
@@ -222,13 +323,6 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
   }
 
   // The main algorithm
-  pvector<ScoreT> scores(g.num_nodes(), -1);
-  pvector<CountT> path_counts(g.num_nodes());
-  Bitmap succ(g.num_edges_directed());
-  vector<SlidingQueue<NodeID>::iterator> depth_index;
-  SlidingQueue<NodeID> queue(g.num_nodes());
-  pvector<NodeID> depths(g.num_nodes(), 0);
-  pvector<ScoreT> deltas(g.num_nodes(), 0);
   const NodeID* g_out_start = g.out_neigh(0).begin();
   for (NodeID iter=0; iter < num_iters; iter++) {
     NodeID source = sp.PickNext();
