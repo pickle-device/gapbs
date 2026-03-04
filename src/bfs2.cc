@@ -309,6 +309,10 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
     // ---
     job.print();
     std::cout << "Sent job" << std::endl;
+    queue.getArrayDescriptor()->name = "queue";
+    g.getOutIndexArrayDescriptor()->name = "out_index";
+    g.getOutNeighborsArrayDescriptor()->name = "out_neighbors";
+    parent.getArrayDescriptor()->name = "parent";
     pdev->sendJob(createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent));
 
     UCPage = (uint64_t*) pdev->getUCPagePtr(0);

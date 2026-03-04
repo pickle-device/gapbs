@@ -338,15 +338,18 @@ pvector<NodeID> DoCC(const Graph &g, int trial_num) {
         // We get the array descriptors from the graph. Note that the relation between the arrays here
         // is already set up by the graph's constructor.
         std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
+        out_index_array_descriptor->name = "out_index";
         out_index_array_descriptor->access_type = AccessType::Ranged;
         out_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
         job.addArrayDescriptor(out_index_array_descriptor);
         std::shared_ptr<PickleArrayDescriptor> out_neighbors_array_descriptor = g.getOutNeighborsArrayDescriptor();
+        out_neighbors_array_descriptor->name = "out_neighbors";
         out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
         out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
         job.addArrayDescriptor(out_neighbors_array_descriptor);
         // We add the result array descriptor
         auto result_array_descriptor = result.getArrayDescriptor();
+        result_array_descriptor->name = "result";
         result_array_descriptor->access_type = AccessType::SingleElement;
         result_array_descriptor->addressing_mode = AddressingMode::Index;
         out_neighbors_array_descriptor->dst_indexing_array_id = result_array_descriptor->getArrayId();
