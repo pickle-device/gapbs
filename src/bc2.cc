@@ -198,26 +198,26 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
   pvector<ScoreT> deltas(g.num_nodes(), 0);
 
   /* Determine if we use Pickle prefetcher */
+#if ENABLE_PICKLEDEVICE==1
   uint64_t use_pdev = 0;
   uint64_t prefetch_distance = 0;
   PrefetchMode prefetch_mode = PrefetchMode::UNKNOWN;
   uint64_t bulk_mode_chunk_size = 0;
-  
+#endif
+
+#if ENABLE_PICKLEDEVICE==1
   // Only use pdev in the second trial
   if (trial_num == 1) {
-#if ENABLE_PICKLEDEVICE==1
     PickleDevicePrefetcherSpecs specs = pdev->getDevicePrefetcherSpecs();
     use_pdev = specs.availability;
     prefetch_distance = specs.prefetch_distance;
     prefetch_mode = specs.prefetch_mode;
     bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
-#endif
     std::cout << "Device specs: " << std::endl;
     std::cout << "  . Use pdev: " << use_pdev << std::endl;
     std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
     std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
     std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
-#if ENABLE_PICKLEDEVICE==1
     if (use_pdev == 1) {
         // kernel_1: queue -> out_neigh_ptr -> out_neigh -> depths & path_counts
         // kernel_2: depth_index[d] -> out_neigh_ptr -> out_neigh -> path_counts & deltas
@@ -319,8 +319,8 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
         std::cout << "UCPage_Kernel2: 0x" << std::hex << (uint64_t)UCPage_Kernel2 << std::dec << std::endl;
         assert(UCPage != nullptr);
     }
-#endif
   }
+#endif
 
   // The main algorithm
   const NodeID* g_out_start = g.out_neigh(0).begin();
@@ -336,6 +336,14 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 1 (for trial 0) or exit 3 (for trial 1)
 #endif // ENABLE_GEM5
+
+#if ENABLE_PICKLEDEVICE==1
+    // Turn on the performance watcher
+    PerfPage = (uint64_t*) pdev->getPerfPagePtr();
+    std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
+    assert(PerfPage != nullptr);
+#endif
+
     if ((trial_num == 1 && use_pdev == 1)) {
       if (prefetch_mode == PrefetchMode::BULK_PREFETCH) {
         assert(false && "The bulk prefetch mode has not been supported yet");
