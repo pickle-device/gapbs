@@ -503,7 +503,14 @@ int main(int argc, char* argv[]) {
                                      const pvector<ScoreT> &scores) {
     return BCVerifier(g, vsp, MAX_BRANDES_NUM_ITERS, scores);
   };
+#if ENABLE_GEM5==1
+  map_m5_mem();
+#endif // ENABLE_GEM5
   BenchmarkKernel(cli, g, BCBound, PrintTopScores, VerifierBound);
+#if ENABLE_GEM5==1
+  //m5_work_end_addr(0, 0);
+  //unmap_m5_mem();
+#endif // ENABLE_GEM5
   //printf("Num node visited: %d\n", num_nodes_visited.load());
   return 0;
 }
