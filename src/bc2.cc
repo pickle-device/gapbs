@@ -375,7 +375,9 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
     } else {
       PBFS(g, source, depths, path_counts, succ, depth_index, queue);
       for (int d=depth_index.size()-2; d >= 0; d--) {
-        #pragma omp parallel for schedule(dynamic, 64)
+        //#pragma omp parallel for schedule(dynamic, 64)
+        // Let's do static scheduling for now
+        #pragma omp parallel for schedule(static)
         for (auto it = depth_index[d]; it < depth_index[d+1]; it++) {
           NodeID u = *it;
           ScoreT delta_u = 0;
