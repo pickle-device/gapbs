@@ -294,6 +294,7 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
           path_counts_array_descriptor->access_type = AccessType::SingleElement;
           path_counts_array_descriptor->addressing_mode = AddressingMode::Index;
           out_neighbors_array_descriptor->dst_indexing_array_id = path_counts_array_descriptor->getArrayId();
+          job.addArrayDescriptor(path_counts_array_descriptor);
           // Add the `deltas` array descriptor
           auto deltas_array_descriptor = deltas.getArrayDescriptor();
           deltas_array_descriptor->name = "deltas";
