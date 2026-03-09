@@ -150,13 +150,13 @@ void DeltaStepWithPrefetch(
       #pragma omp for schedule(static) nowait
       for (size_t i=0; i < curr_frontier_tail; i++) {
         NodeID u = frontier[i];
-        if (dist[u] >= threshold)
-          RelaxEdges(g, u, delta, dist, local_bins);
 #if ENABLE_PICKLEDEVICE==1
         if (i + prefetch_distance < curr_frontier_tail) {
             *UCPage_Kernel1 = (uint64_t)(&(frontier[i+prefetch_distance]));
         }
 #endif
+        if (dist[u] >= threshold)
+          RelaxEdges(g, u, delta, dist, local_bins);
       }
       while (curr_bin_index < local_bins.size() &&
              !local_bins[curr_bin_index].empty() &&
@@ -166,13 +166,13 @@ void DeltaStepWithPrefetch(
         //for (NodeID u : curr_bin_copy)
         //  RelaxEdges(g, u, delta, dist, local_bins);
         for (auto u_iter = curr_bin_copy.begin(); u_iter < curr_bin_copy.end(); u_iter++) {
-          RelaxEdges(g, *u_iter, delta, dist, local_bins);
 #if ENABLE_PICKLEDEVICE==1
           auto prefetch_iter = u_iter + prefetch_distance;
           if (prefetch_iter < curr_bin_copy.end()) {
             *UCPage_Kernel2 = (uint64_t)(&(*prefetch_iter));
           }
 #endif
+          RelaxEdges(g, *u_iter, delta, dist, local_bins);
         }
       }
       for (size_t i=curr_bin_index; i < local_bins.size(); i++) {
@@ -221,6 +221,7 @@ void DeltaStep(
   size_t shared_indexes[2] = {0, kMaxBin};
   size_t frontier_tails[2] = {1, 0};
   frontier[0] = source;
+
 #if ENABLE_GEM5==1
   m5_exit_addr(0); // exit 1 (for trial 0) or exit 3 (for trial 1)
 #endif // ENABLE_GEM5
@@ -244,10 +245,10 @@ void DeltaStep(
       size_t &next_bin_index = shared_indexes[(iter+1)&1];
       size_t &curr_frontier_tail = frontier_tails[iter&1];
       size_t &next_frontier_tail = frontier_tails[(iter+1)&1];
+      const WeightT threshold = delta * static_cast<WeightT>(curr_bin_index);
       //#pragma omp for nowait schedule(dynamic, 64)
       // Let's use static scheduling for now.
       // Benchmarking shows this make no difference performance-wise.
-      const WeightT threshold = delta * static_cast<WeightT>(curr_bin_index);
       #pragma omp for schedule(static) nowait
       for (size_t i=0; i < curr_frontier_tail; i++) {
         NodeID u = frontier[i];
@@ -336,6 +337,94 @@ pvector<WeightT> DoSSSP(
 
     if (use_pdev == 1) {
 #if ENABLE_PICKLEDEVICE==1
+      // Send prefech job descriptions
+      // Job 1 (Kernel 1: prefetch if dist[u] meets threshold)
+      {
+        PickleJob job(/*kernel_name*/"sssp_kernel_1");
+        std::shared_ptr<PickleArrayDescriptor> frontier_array_descriptor = frontier.getArrayDescriptor();
+        frontier_array_descriptor->name = "frontier";
+        frontier_array_descriptor->access_type = AccessType::SingleElement;
+        frontier_array_descriptor->addressing_mode = AddressingMode::Index;
+        job.addArrayDescriptor(frontier_array_descriptor);
+        // We get the array descriptors from the graph. Note that the relation between the arrays here
+        // is already set up by the graph's constructor.
+        std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
+        out_index_array_descriptor->name = "out_index";
+        out_index_array_descriptor->access_type = AccessType::Ranged;
+        out_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
+        frontier_array_descriptor->dst_indexing_array_id = out_index_array_descriptor->getArrayId();
+        job.addArrayDescriptor(out_index_array_descriptor);
+        std::shared_ptr<PickleArrayDescriptor> out_neighbors_array_descriptor = g.getOutNeighborsArrayDescriptor();
+        out_neighbors_array_descriptor->name = "out_neighbors";
+        out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
+        out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
+        job.addArrayDescriptor(out_neighbors_array_descriptor);
+        // Add the `dist` array descriptor
+        auto dist_array_descriptor = dist.getArrayDescriptor();
+        dist_array_descriptor->name = "dist";
+        dist_array_descriptor->access_type = AccessType::SingleElement;
+        dist_array_descriptor->addressing_mode = AddressingMode::Index;
+        out_neighbors_array_descriptor->dst_indexing_array_id = dist_array_descriptor->getArrayId();
+        job.addArrayDescriptor(dist_array_descriptor);
+        // Send the job
+        job.print();
+        pdev->sendJob(job);
+        std::cout << "Sent kernel_1" << std::endl;
+      }
+      {
+        PickleJob job(/*kernel_name*/"sssp_kernel_2");
+        // The curr_bin_copy array is a local array that is created and deleted multiple times over the course
+        // the algorithm runtime.
+        // However, we don't really need to know the base address, the array size, or the element size of the
+        // array as we don't need to index to this array. So we'll just place a dummy value for all fields.
+        std::shared_ptr<PickleArrayDescriptor> curr_bin_copy_array_descriptor(new PickleArrayDescriptor());
+        curr_bin_copy_array_descriptor->name = "curr_bin_copy";
+        curr_bin_copy_array_descriptor->vaddr_start = 0;
+        curr_bin_copy_array_descriptor->vaddr_end = 0;
+        curr_bin_copy_array_descriptor->element_size = 0;
+        curr_bin_copy_array_descriptor->access_type = AccessType::SingleElement;
+        curr_bin_copy_array_descriptor->addressing_mode = AddressingMode::Index;
+        // We get the array descriptors from the graph. Note that the relation between the arrays here
+        // is already set up by the graph's constructor.
+        std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
+        out_index_array_descriptor->name = "out_index";
+        out_index_array_descriptor->access_type = AccessType::Ranged;
+        out_index_array_descriptor->addressing_mode = AddressingMode::Pointer;
+        curr_bin_copy_array_descriptor->dst_indexing_array_id = out_index_array_descriptor->getArrayId();
+        job.addArrayDescriptor(out_index_array_descriptor);
+        std::shared_ptr<PickleArrayDescriptor> out_neighbors_array_descriptor = g.getOutNeighborsArrayDescriptor();
+        out_neighbors_array_descriptor->name = "out_neighbors";
+        out_neighbors_array_descriptor->access_type = AccessType::SingleElement;
+        out_neighbors_array_descriptor->addressing_mode = AddressingMode::Index;
+        job.addArrayDescriptor(out_neighbors_array_descriptor);
+         // Add the `dist` array descriptor
+        auto dist_array_descriptor = dist.getArrayDescriptor();
+        dist_array_descriptor->name = "dist";
+        dist_array_descriptor->access_type = AccessType::SingleElement;
+        dist_array_descriptor->addressing_mode = AddressingMode::Index;
+        out_neighbors_array_descriptor->dst_indexing_array_id = dist_array_descriptor->getArrayId();
+        job.addArrayDescriptor(dist_array_descriptor);
+        // Send the job
+        job.print();
+        pdev->sendJob(job);
+        std::cout << "Sent kernel_2" << std::endl;
+      }
+      {
+        PickleJob job(/*kernel_name*/"sssp_kernel_3");
+        // This is a kernel that keeps the value of the `threshold` variable sent by the program at runtime.
+        // So, we'll just place a dummy array descriptor here.
+        std::shared_ptr<PickleArrayDescriptor> dummy_array_descriptor(new PickleArrayDescriptor());
+        dummy_array_descriptor->name = "dummy";
+        dummy_array_descriptor->vaddr_start = 0;
+        dummy_array_descriptor->vaddr_end = 0;
+        dummy_array_descriptor->element_size = 0;
+        dummy_array_descriptor->access_type = AccessType::SingleElement;
+        dummy_array_descriptor->addressing_mode = AddressingMode::Index;
+        // Send the job
+        job.print();
+        pdev->sendJob(job);
+        std::cout << "Sent kernel_3" << std::endl;
+      }
       // Create communication page
       UCPage = (uint64_t*) pdev->getUCPagePtr(0);
       UCPage_Kernel1 = UCPage;
