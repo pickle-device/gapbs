@@ -152,7 +152,7 @@ void DeltaStepWithPrefetch(
         NodeID u = frontier[i];
 #if ENABLE_PICKLEDEVICE==1
         if (i + prefetch_distance < curr_frontier_tail) {
-            *UCPage_Kernel1 = (uint64_t)(&(frontier[i+prefetch_distance]));
+            *UCPage_Kernel1 = (uint64_t)(&(frontier[i]));
         }
 #endif
         if (dist[u] >= threshold)
@@ -169,7 +169,7 @@ void DeltaStepWithPrefetch(
 #if ENABLE_PICKLEDEVICE==1
           auto prefetch_iter = u_iter + prefetch_distance;
           if (prefetch_iter < curr_bin_copy.end()) {
-            *UCPage_Kernel2 = (uint64_t)(&(*prefetch_iter));
+            *UCPage_Kernel2 = (uint64_t)(&(*u_iter));
           }
 #endif
           RelaxEdges(g, *u_iter, delta, dist, local_bins);
@@ -376,13 +376,14 @@ pvector<WeightT> DoSSSP(
         PickleJob job(/*kernel_name*/"sssp_kernel_2");
         // The curr_bin_copy array is a local array that is created and deleted multiple times over the course
         // the algorithm runtime.
-        // However, we don't really need to know the base address, the array size, or the element size of the
-        // array as we don't need to index to this array. So we'll just place a dummy value for all fields.
+        // However, we don't really need to know the base address, or the array size as we don't need to index
+        // to this array. Though, we do need to know the element size of the array to calculate the prefetches
+        // accordingly to the prefetch distance. So we'll just place a dummy value for all fields.
         std::shared_ptr<PickleArrayDescriptor> curr_bin_copy_array_descriptor(new PickleArrayDescriptor());
         curr_bin_copy_array_descriptor->name = "curr_bin_copy";
         curr_bin_copy_array_descriptor->vaddr_start = 0;
         curr_bin_copy_array_descriptor->vaddr_end = 0;
-        curr_bin_copy_array_descriptor->element_size = 0;
+        curr_bin_copy_array_descriptor->element_size = sizeof(NodeID);
         curr_bin_copy_array_descriptor->access_type = AccessType::SingleElement;
         curr_bin_copy_array_descriptor->addressing_mode = AddressingMode::Index;
         job.addArrayDescriptor(curr_bin_copy_array_descriptor);
