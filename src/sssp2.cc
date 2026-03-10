@@ -227,10 +227,10 @@ void DeltaStep(
 #endif // ENABLE_GEM5
 
 #if ENABLE_PICKLEDEVICE==1
-    // Turn on the performance watcher
-    PerfPage = (uint64_t*) pdev->getPerfPagePtr();
-    std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
-    assert(PerfPage != nullptr);
+  // Turn on the performance watcher
+  PerfPage = (uint64_t*) pdev->getPerfPagePtr();
+  std::cout << "PerfPage: 0x" << std::hex << (uint64_t)PerfPage << std::dec << std::endl;
+  assert(PerfPage != nullptr);
 #endif
   #pragma omp parallel
   {
@@ -322,7 +322,7 @@ pvector<WeightT> DoSSSP(
 #endif
 
 #if ENABLE_PICKLEDEVICE==1
-  // Only use pdev in the second trial
+    // Only use pdev in the second trial
     PickleDevicePrefetcherSpecs specs = pdev->getDevicePrefetcherSpecs();
     use_pdev = specs.availability;
     prefetch_distance = specs.prefetch_distance;
@@ -371,6 +371,7 @@ pvector<WeightT> DoSSSP(
         pdev->sendJob(job);
         std::cout << "Sent kernel_1" << std::endl;
       }
+      // Job 2 (Kernel 2: Prefetch dist[v] for all v in the neighbors of u)
       {
         PickleJob job(/*kernel_name*/"sssp_kernel_2");
         // The curr_bin_copy array is a local array that is created and deleted multiple times over the course
@@ -384,6 +385,7 @@ pvector<WeightT> DoSSSP(
         curr_bin_copy_array_descriptor->element_size = 0;
         curr_bin_copy_array_descriptor->access_type = AccessType::SingleElement;
         curr_bin_copy_array_descriptor->addressing_mode = AddressingMode::Index;
+        job.addArrayDescriptor(curr_bin_copy_array_descriptor);
         // We get the array descriptors from the graph. Note that the relation between the arrays here
         // is already set up by the graph's constructor.
         std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
@@ -409,18 +411,10 @@ pvector<WeightT> DoSSSP(
         pdev->sendJob(job);
         std::cout << "Sent kernel_2" << std::endl;
       }
+      // Job 3 (Kernel 3: A dummy kernel)
       {
         PickleJob job(/*kernel_name*/"sssp_kernel_3");
         // This is a kernel that keeps the value of the `threshold` variable sent by the program at runtime.
-        // So, we'll just place a dummy array descriptor here.
-        std::shared_ptr<PickleArrayDescriptor> dummy_array_descriptor(new PickleArrayDescriptor());
-        dummy_array_descriptor->name = "dummy";
-        dummy_array_descriptor->vaddr_start = 0;
-        dummy_array_descriptor->vaddr_end = 0;
-        dummy_array_descriptor->element_size = 0;
-        dummy_array_descriptor->access_type = AccessType::SingleElement;
-        dummy_array_descriptor->addressing_mode = AddressingMode::Index;
-        // Send the job
         job.print();
         pdev->sendJob(job);
         std::cout << "Sent kernel_3" << std::endl;
