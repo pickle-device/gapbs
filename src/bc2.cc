@@ -70,6 +70,7 @@ typedef double CountT;
 
 uint64_t* UCPage = NULL;
 uint64_t* UCPage_Kernel2 = NULL;
+uint64_t* UCPage_Kernel3 = NULL;
 uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
@@ -146,6 +147,9 @@ void PBFSWithPrefetch(const Graph &g, NodeID source, pvector<NodeID>& depths,
     QueueBuffer<NodeID> lqueue(queue);
     while (!queue.empty()) {
       depth++;
+#if ENABLE_PICKLEDEVICE==1
+      *UCPage_Kernel3 = (uint64_t)(depth);
+#endif
       //#pragma omp for schedule(dynamic, 64) nowait
       // Let's do static scheduling for now
       #pragma omp for schedule(static) nowait
@@ -313,11 +317,21 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
           std::cout << "Sent kernel_2" << std::endl;
           pdev->sendJob(job);
         }
+        // Job 3 (Kernel 3: A dummy kernel)
+        {
+          PickleJob job(/*kernel_name*/"bc_kernel_3");
+          // This is a kernel that keeps the value of the `depth` variable sent by the program at runtime.
+          job.print();
+          pdev->sendJob(job);
+          std::cout << "Sent kernel_3" << std::endl;
+        }
         // Create communication page
         UCPage = (uint64_t*) pdev->getUCPagePtr(0);
         UCPage_Kernel2 = UCPage + 1;
+        UCPage_Kernel3 = UCPage + 2;
         std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
         std::cout << "UCPage_Kernel2: 0x" << std::hex << (uint64_t)UCPage_Kernel2 << std::dec << std::endl;
+        std::cout << "UCPage_Kernel3: 0x" << std::hex << (uint64_t)UCPage_Kernel3 << std::dec << std::endl;
         assert(UCPage != nullptr);
     }
   }
