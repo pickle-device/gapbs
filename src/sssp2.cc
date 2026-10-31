@@ -84,6 +84,7 @@ uint64_t* UCPage = NULL;
 uint64_t* UCPage_Kernel1 = NULL; // Prefetch RelaxEdges with checking threshold
 uint64_t* UCPage_Kernel2 = NULL; // Prefetch RelaxEdges without checking threshold
 uint64_t* UCPage_Kernel3 = NULL; // Tell the prefetcher about threshold
+uint64_t* MaplePage = NULL;
 uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
@@ -112,7 +113,7 @@ void RelaxEdges(const WGraph &g, NodeID u, WeightT delta,
   }
 }
 
-void DeltaStepWithPrefetch(
+void DeltaStepWithPickle(
   const WGraph &g, NodeID source, WeightT delta,
   pvector<WeightT>& dist, pvector<NodeID>& frontier,
   const uint64_t prefetch_distance,
@@ -169,6 +170,118 @@ void DeltaStepWithPrefetch(
 #if ENABLE_PICKLEDEVICE==1
           auto prefetch_iter = u_iter + prefetch_distance;
           if (prefetch_iter < curr_bin_copy.end()) {
+            *UCPage_Kernel2 = (uint64_t)(&(*u_iter));
+          }
+#endif
+          RelaxEdges(g, *u_iter, delta, dist, local_bins);
+        }
+      }
+      for (size_t i=curr_bin_index; i < local_bins.size(); i++) {
+        if (!local_bins[i].empty()) {
+          #pragma omp critical
+          next_bin_index = min(next_bin_index, i);
+          break;
+        }
+      }
+      #pragma omp barrier
+      #pragma omp single nowait
+      {
+        curr_bin_index = kMaxBin;
+        curr_frontier_tail = 0;
+      }
+      if (next_bin_index < local_bins.size()) {
+        size_t copy_start = fetch_and_add(next_frontier_tail,
+                                          local_bins[next_bin_index].size());
+        copy(local_bins[next_bin_index].begin(),
+             local_bins[next_bin_index].end(), frontier.data() + copy_start);
+        local_bins[next_bin_index].resize(0);
+      }
+      iter++;
+      #pragma omp barrier
+    }
+    #pragma omp single
+    {
+      cout << "took " << iter << " iterations" << endl;
+    }
+#if ENABLE_PICKLEDEVICE==1
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+  }
+#if ENABLE_GEM5==1
+  m5_exit_addr(0); // exit 4 (for trial 1)
+#endif // ENABLE_GEM5
+}
+
+void DeltaStepWithMaple(
+  const WGraph &g, NodeID source, WeightT delta,
+  pvector<WeightT>& dist, pvector<NodeID>& frontier,
+  const uint64_t prefetch_distance,
+  bool logging_enabled = false
+) {
+  dist[source] = 0;
+  // two element arrays for double buffering curr=iter&1, next=(iter+1)&1
+  size_t shared_indexes[2] = {0, kMaxBin};
+  size_t frontier_tails[2] = {1, 0};
+  frontier[0] = source;
+#if ENABLE_GEM5==1
+  m5_exit_addr(0); // exit 3 (for trial 1)
+#endif // ENABLE_GEM5
+  #pragma omp parallel
+  {
+#if ENABLE_PICKLEDEVICE==1
+    const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+    vector<vector<NodeID> > local_bins(0);
+    size_t iter = 0;
+    while (shared_indexes[iter&1] != kMaxBin) {
+      size_t &curr_bin_index = shared_indexes[iter&1];
+      size_t &next_bin_index = shared_indexes[(iter+1)&1];
+      size_t &curr_frontier_tail = frontier_tails[iter&1];
+      size_t &next_frontier_tail = frontier_tails[(iter+1)&1];
+      // New threshold for the new iter
+      const WeightT threshold = delta * static_cast<WeightT>(curr_bin_index);
+      //#pragma omp for nowait schedule(dynamic, 64)
+      // Let's use static scheduling for now.
+      // Benchmarking shows this make no difference performance-wise.
+      #pragma omp for schedule(static) nowait
+      for (size_t i=0; i < curr_frontier_tail; i++) {
+        NodeID u = frontier[i];
+#if ENABLE_PICKLEDEVICE==1
+        if (i + prefetch_distance < curr_frontier_tail) {
+            // Address calculation
+            NodeID pu = frontier[i+prefetch_distance];
+            auto pneigh = g.out_neigh(pu);
+            uint64_t start = (uint64_t)pneigh.begin();
+            uint64_t end = (uint64_t)pneigh.end();
+            // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+            // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+            *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+            *UCPage_Kernel1 = (uint64_t)(&(frontier[i]));
+        }
+#endif
+        if (dist[u] >= threshold)
+          RelaxEdges(g, u, delta, dist, local_bins);
+      }
+      while (curr_bin_index < local_bins.size() &&
+             !local_bins[curr_bin_index].empty() &&
+             local_bins[curr_bin_index].size() < kBinSizeThreshold) {
+        vector<NodeID> curr_bin_copy = local_bins[curr_bin_index];
+        local_bins[curr_bin_index].resize(0);
+        //for (NodeID u : curr_bin_copy)
+        //  RelaxEdges(g, u, delta, dist, local_bins);
+        for (auto u_iter = curr_bin_copy.begin(); u_iter < curr_bin_copy.end(); u_iter++) {
+#if ENABLE_PICKLEDEVICE==1
+          auto prefetch_iter = u_iter + prefetch_distance;
+          if (prefetch_iter < curr_bin_copy.end()) {
+            // Address calculation
+            NodeID pu = *prefetch_iter;
+            auto pneigh = g.out_neigh(pu);
+            uint64_t start = (uint64_t)pneigh.begin();
+            uint64_t end = (uint64_t)pneigh.end();
+            // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+            // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+            *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
             *UCPage_Kernel2 = (uint64_t)(&(*u_iter));
           }
 #endif
@@ -329,18 +442,19 @@ pvector<WeightT> DoSSSP(
     prefetch_mode = specs.prefetch_mode;
     bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
     std::cout << "Device specs: " << std::endl;
-    std::cout << "  . Use pdev: " << use_pdev << std::endl;
+    std::cout << "  . Use pdev (0: no prefetcher, 1: pickle, 2: maple):: " << use_pdev << std::endl;
     std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
     std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
     std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
 #endif
 
-    if (use_pdev == 1) {
+    if ((use_pdev == 1) || (use_pdev == 2)) {
 #if ENABLE_PICKLEDEVICE==1
       // Send prefech job descriptions
       // Job 1 (Kernel 1: prefetch if dist[u] meets threshold)
       {
-        PickleJob job(/*kernel_name*/"sssp_kernel_1");
+        std::string kernel_name = (use_pdev == 2) ? "sssp_maple_kernel_1" : "sssp_kernel_1";
+        PickleJob job(/*kernel_name*/kernel_name);
         std::shared_ptr<PickleArrayDescriptor> frontier_array_descriptor = frontier.getArrayDescriptor();
         frontier_array_descriptor->name = "frontier";
         frontier_array_descriptor->access_type = AccessType::SingleElement;
@@ -373,7 +487,8 @@ pvector<WeightT> DoSSSP(
       }
       // Job 2 (Kernel 2: Prefetch dist[v] for all v in the neighbors of u)
       {
-        PickleJob job(/*kernel_name*/"sssp_kernel_2");
+        std::string kernel_name = (use_pdev == 2) ? "sssp_maple_kernel_2" : "sssp_kernel_2";
+        PickleJob job(/*kernel_name*/kernel_name);
         // The curr_bin_copy array is a local array that is created and deleted multiple times over the course
         // the algorithm runtime.
         // However, we don't really need to know the base address, or the array size as we don't need to index
@@ -429,10 +544,27 @@ pvector<WeightT> DoSSSP(
       std::cout << "UCPage_Kernel2: 0x" << std::hex << (uint64_t)UCPage_Kernel2 << std::dec << std::endl;
       std::cout << "UCPage_Kernel3: 0x" << std::hex << (uint64_t)UCPage_Kernel3 << std::dec << std::endl;
       assert(UCPage != nullptr);
+      if (use_pdev == 2) { // MAPLE
+        // The following two kernels are to emulate sending the start/end addresses to prefetch engine by MAPLE
+        {
+          PickleJob job(/*kernel_name*/"maple_kernel");
+          job.print();
+          pdev->sendJob(job);
+          std::cout << "Sent maple_kernel" << std::endl;
+        }
+        MaplePage = UCPage + 1;
+        std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+      }
 #endif
-      DeltaStepWithPrefetch(
-        g, source, delta, dist, frontier, prefetch_distance
-      );
+      if (use_pdev == 1) {
+        DeltaStepWithPickle(
+            g, source, delta, dist, frontier, prefetch_distance
+        );
+      } else if (use_pdev == 2) {
+        DeltaStepWithMaple(
+            g, source, delta, dist, frontier, prefetch_distance
+        );
+      }
     } else {
       DeltaStep(g, source, delta, dist, frontier);
     }
