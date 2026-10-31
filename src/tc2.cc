@@ -273,13 +273,11 @@ size_t DoTC(const Graph &g, int trial_num) {
         std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
         assert(UCPage != nullptr);
         if (use_pdev == 2) { // MAPLE
-            // The following two kernels are to emulate sending the start/end addresses to prefetch engine by MAPLE
-            {
-                PickleJob job(/*kernel_name*/"maple_kernel");
-                job.print();
-                pdev->sendJob(job);
-                std::cout << "Sent maple_kernel" << std::endl;
-            }
+            // The following kernel is to emulate sending the start/end addresses to prefetch engine by MAPLE
+            PickleJob job(/*kernel_name*/"maple_kernel");
+            job.print();
+            pdev->sendJob(job);
+            std::cout << "Sent maple_kernel" << std::endl;
             MaplePage = UCPage + 1;
             std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
         }

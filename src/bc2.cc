@@ -71,6 +71,7 @@ typedef double CountT;
 uint64_t* UCPage = NULL;
 uint64_t* UCPage_Kernel2 = NULL;
 uint64_t* UCPage_Kernel3 = NULL;
+uint64_t* MaplePage = NULL;
 uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
@@ -127,7 +128,7 @@ void PBFS(const Graph &g, NodeID source, pvector<NodeID>& depths,
   depth_index.push_back(queue.begin());
 }
 
-void PBFSWithPrefetch(const Graph &g, NodeID source, pvector<NodeID>& depths,
+void PBFSWithPickle(const Graph &g, NodeID source, pvector<NodeID>& depths,
     pvector<CountT> &path_counts,
     Bitmap &succ, vector<SlidingQueue<NodeID>::iterator> &depth_index,
     SlidingQueue<NodeID> &queue, const uint64_t prefetch_distance) {
@@ -189,6 +190,73 @@ void PBFSWithPrefetch(const Graph &g, NodeID source, pvector<NodeID>& depths,
   depth_index.push_back(queue.begin());
 }
 
+void PBFSWithMaple(const Graph &g, NodeID source, pvector<NodeID>& depths,
+    pvector<CountT> &path_counts,
+    Bitmap &succ, vector<SlidingQueue<NodeID>::iterator> &depth_index,
+    SlidingQueue<NodeID> &queue, const uint64_t prefetch_distance) {
+  depths[source] = 0;
+  path_counts[source] = 1;
+  queue.push_back(source);
+  depth_index.push_back(queue.begin());
+  queue.slide_window();
+  const NodeID* g_out_start = g.out_neigh(0).begin();
+  #pragma omp parallel
+  {
+#if ENABLE_PICKLEDEVICE==1
+    const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+    NodeID depth = 0;
+    QueueBuffer<NodeID> lqueue(queue);
+    while (!queue.empty()) {
+      depth++;
+      //#pragma omp for schedule(dynamic, 64) nowait
+      // Let's do static scheduling for now
+      #pragma omp for schedule(static) nowait
+      for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
+        NodeID u = *q_iter;
+#if ENABLE_PICKLEDEVICE==1
+        auto prefetch_iter = q_iter + prefetch_distance;
+        if (prefetch_iter < queue.end()) {
+          // Address calculation
+          NodeID pu = *prefetch_iter;
+          auto pneigh = g.out_neigh(pu);
+          uint64_t start = (uint64_t)pneigh.begin();
+          uint64_t end = (uint64_t)pneigh.end();
+          // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+          // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+          *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+          *UCPage = (uint64_t)(&(*q_iter)); // We send the current position of the work_queue
+        }
+#endif
+        for (NodeID &v : g.out_neigh(u)) {
+          if ((depths[v] == -1) &&
+              (compare_and_swap(depths[v], static_cast<NodeID>(-1), depth))) {
+            //num_nodes_visited++;
+            lqueue.push_back(v);
+          }
+          if (depths[v] == depth) {
+            succ.set_bit_atomic(&v - g_out_start);
+            #pragma omp atomic
+            path_counts[v] += path_counts[u];
+          }
+        }
+      }
+      lqueue.flush();
+      #pragma omp barrier
+      #pragma omp single
+      {
+        depth_index.push_back(queue.begin());
+        queue.slide_window();
+      }
+    }
+#if ENABLE_PICKLEDEVICE==1
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
+  }
+  depth_index.push_back(queue.begin());
+}
+
 pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
                         NodeID num_iters, uint64_t trial_num,
                         bool logging_enabled = false) {
@@ -218,16 +286,17 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
     prefetch_mode = specs.prefetch_mode;
     bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
     std::cout << "Device specs: " << std::endl;
-    std::cout << "  . Use pdev: " << use_pdev << std::endl;
+    std::cout << "  . Use pdev (0: no prefetcher, 1: pickle, 2: maple): " << use_pdev << std::endl;
     std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
     std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
     std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
-    if (use_pdev == 1) {
+    if ((use_pdev == 1) || (use_pdev == 2)) {
         // kernel_1: queue -> out_neigh_ptr -> out_neigh -> depths & path_counts
         // kernel_2: depth_index[d] -> out_neigh_ptr -> out_neigh -> path_counts & deltas
         //           depth_index[d] -> scores
         {
-          PickleJob job(/*kernel_name*/"bc_kernel_1");
+          std::string kernel_name = (use_pdev == 2) ? "bc_maple_kernel_1" : "bc_kernel_1";
+          PickleJob job(/*kernel_name*/kernel_name);
           std::shared_ptr<PickleArrayDescriptor> queue_array_descriptor = queue.getArrayDescriptor();
           queue_array_descriptor->name = "queue";
           queue_array_descriptor->access_type = AccessType::SingleElement;
@@ -265,7 +334,8 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
           std::cout << "Sent kernel_1" << std::endl;
         }
         {
-          PickleJob job(/*kernel_name*/"bc_kernel_2");
+          std::string kernel_name = (use_pdev == 2) ? "bc_maple_kernel_2" : "bc_kernel_2";
+          PickleJob job(/*kernel_name*/kernel_name);
           // For the depth_index, it's a vector of iterators where the iterators are added during the run time.
           // For prefetching, this is the first layer of indirection, and we don't actually need to know the base
           // address each iterator as we send the address of the current_node and we guarantee that the address of
@@ -333,6 +403,15 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
         std::cout << "UCPage_Kernel2: 0x" << std::hex << (uint64_t)UCPage_Kernel2 << std::dec << std::endl;
         std::cout << "UCPage_Kernel3: 0x" << std::hex << (uint64_t)UCPage_Kernel3 << std::dec << std::endl;
         assert(UCPage != nullptr);
+        if (use_pdev == 2) { // MAPLE
+            // The following kernel is to emulate sending the start/end addresses to prefetch engine by MAPLE
+            PickleJob job(/*kernel_name*/"maple_kernel");
+            job.print();
+            pdev->sendJob(job);
+            std::cout << "Sent maple_kernel" << std::endl;
+            MaplePage = UCPage + 1;
+            std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+        }
     }
   }
 #endif
@@ -363,7 +442,7 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
       if (prefetch_mode == PrefetchMode::BULK_PREFETCH) {
         assert(false && "The bulk prefetch mode has not been supported yet");
       }
-      PBFSWithPrefetch(g, source, depths, path_counts, succ, depth_index, queue, prefetch_distance);
+      PBFSWithPickle(g, source, depths, path_counts, succ, depth_index, queue, prefetch_distance);
       for (int d=depth_index.size()-2; d >= 0; d--) {
         //#pragma omp parallel for schedule(dynamic, 64)
         // Let's do static scheduling for now
@@ -377,6 +456,38 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
             *UCPage_Kernel2 = (uint64_t)(&(*it));
           }
 #endif
+          for (NodeID &v : g.out_neigh(u)) {
+            if (succ.get_bit(&v - g_out_start)) {
+              delta_u += (path_counts[u] / path_counts[v]) * (1 + deltas[v]);
+            }
+          }
+          deltas[u] = delta_u;
+          scores[u] += delta_u;
+        }
+      }
+    } else if ((trial_num == 1 && use_pdev == 2)) {
+      PBFSWithMaple(g, source, depths, path_counts, succ, depth_index, queue, prefetch_distance);
+      for (int d=depth_index.size()-2; d >= 0; d--) {
+        //#pragma omp parallel for schedule(dynamic, 64)
+        // Let's do static scheduling for now
+        #pragma omp parallel for schedule(static)
+        for (auto it = depth_index[d]; it < depth_index[d+1]; it++) {
+          NodeID u = *it;
+          ScoreT delta_u = 0;
+#if ENABLE_PICKLEDEVICE==1
+          auto prefetch_it = it + prefetch_distance;
+          if (prefetch_it < depth_index[d+1]) {
+            // Address calculation
+            NodeID pu = *prefetch_it;
+            auto pneigh = g.out_neigh(pu); 
+            uint64_t start = (uint64_t)pneigh.begin();
+            uint64_t end = (uint64_t)pneigh.end();
+            // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+            // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+            *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+            *UCPage_Kernel2 = (uint64_t)(&(*it));
+          }
+#endif    
           for (NodeID &v : g.out_neigh(u)) {
             if (succ.get_bit(&v - g_out_start)) {
               delta_u += (path_counts[u] / path_counts[v]) * (1 + deltas[v]);
