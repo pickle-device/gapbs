@@ -50,8 +50,9 @@ implementation is still available in src/pr_spmv.cc.
 
 using namespace std;
 
-volatile uint64_t* UCPage = NULL;
-volatile uint64_t* PerfPage = NULL;
+uint64_t* UCPage = NULL;
+uint64_t* MaplePage = NULL;
+uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
 const uint64_t PERF_THREAD_COMPLETE = 1;
@@ -114,6 +115,53 @@ void PageRankPullGSWithPickle(
       for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
         *UCPage = (uint64_t)(u);
+#endif
+        ScoreT incoming_total = 0;
+        for (NodeID v : g.in_neigh(u))
+          incoming_total += outgoing_contrib[v];
+        ScoreT old_score = scores[u];
+        scores[u] = base_score + kDamp * incoming_total;
+        error += fabs(scores[u] - old_score);
+        outgoing_contrib[u] = scores[u] / g.out_degree(u);
+      }
+#if ENABLE_PICKLEDEVICE==1
+      *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
+    }
+}
+
+// Do 1 iteration of PR using GS method with prefetcher
+void PageRankPullGSWithMaple(
+  const Graph &g, pvector<ScoreT>& scores, pvector<ScoreT>& outgoing_contrib, const uint64_t prefetch_distance
+) {
+  const ScoreT init_score = 1.0f / g.num_nodes();
+  const ScoreT base_score = (1.0f - kDamp) / g.num_nodes();
+  #pragma omp parallel for
+  for (NodeID n=0; n < g.num_nodes(); n++)
+    outgoing_contrib[n] = init_score / g.out_degree(n);
+  //for (int iter=0; iter < max_iters; iter++) {
+    double error = 0;
+    #pragma omp parallel
+    {
+#if ENABLE_PICKLEDEVICE==1
+      const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+      *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+      const uint64_t num_nodes = g.num_nodes();
+      #pragma omp for reduction(+ : error) schedule(dynamic, 16384)
+      for (NodeID u=0; u < g.num_nodes(); u++) {
+#if ENABLE_PICKLEDEVICE==1
+        if (u + prefetch_distance < num_nodes)
+        {
+          // Address calculation
+          auto pneigh = g.out_neigh(u + prefetch_distance);
+          uint64_t start = (uint64_t)pneigh.begin();
+          uint64_t end = (uint64_t)pneigh.end();
+          // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+          // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+          *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+          *UCPage = (uint64_t)(u); // Here the actual work, we are reusing the Pickle's interface to trigger prefetch work
+        }
 #endif
         ScoreT incoming_total = 0;
         for (NodeID v : g.in_neigh(u))
@@ -200,15 +248,16 @@ pvector<ScoreT> DoPR(const Graph& g, int trial_num) {
     bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
 #endif                        
     std::cout << "Device specs: " << std::endl;
-    std::cout << "  . Use pdev: " << use_pdev << std::endl;
+    std::cout << "  . Use pdev (0: no prefetcher, 1: pickle, 2: maple): " << use_pdev << std::endl;
     std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
     std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
     std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
 
     // Set up pickle job
 #if ENABLE_PICKLEDEVICE==1
-    if (use_pdev == 1) {
-        PickleJob job(/*kernel_name*/"pr_kernel");
+    if ((use_pdev == 1) || (use_pdev == 2)) {
+        std::string kernel_name = (use_pdev == 2) ? "pr_maple_kernel" : "pr_kernel";
+        PickleJob job(/*kernel_name*/kernel_name);
         // We get the array descriptors from the graph. Note that the relation between the arrays here
         // is already set up by the graph's constructor.
         std::shared_ptr<PickleArrayDescriptor> in_index_array_descriptor = g.getInIndexArrayDescriptor();
@@ -241,16 +290,29 @@ pvector<ScoreT> DoPR(const Graph& g, int trial_num) {
         UCPage = (uint64_t*) pdev->getUCPagePtr(0);
         std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
         assert(UCPage != nullptr);
+        if (use_pdev == 2) { // MAPLE
+            // The following two kernels are to emulate sending the start/end addresses to prefetch engine by MAPLE
+            {
+                PickleJob job(/*kernel_name*/"maple_kernel");
+                job.print();
+                pdev->sendJob(job);
+                std::cout << "Sent maple_kernel" << std::endl;
+            }
+            MaplePage = UCPage + 1;
+            std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+        }
     }
 #endif
     std::cout << "ROI Start" << std::endl; // ----- ROI Start -----
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
-    if (use_pdev == 1) {
+    if (use_pdev == 1) { // Pickle
         PageRankPullGSWithPickle(g, scores, outgoing_contrib);
+    } else if (use_pdev == 2) { // MAPLE
+        PageRankPullGSWithMaple(g, scores, outgoing_contrib, prefetch_distance);
     } else {
-        PageRankPullGS(g, scores, outgoing_contrib);;
+        PageRankPullGS(g, scores, outgoing_contrib);
     }
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 4
