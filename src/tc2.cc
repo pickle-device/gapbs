@@ -68,8 +68,8 @@ graph, we use the heuristic in WorthRelabelling.
 
 using namespace std;
 
-volatile uint64_t* UCPage = NULL;
-volatile uint64_t* PerfPage = NULL;
+uint64_t* UCPage = NULL;
+uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
 const uint64_t PERF_THREAD_COMPLETE = 1;
@@ -106,16 +106,8 @@ size_t OrderedCount(const Graph &g) {
   return total;
 }
 
-size_t OrderedCountWithPrefetch(
-  const Graph &g, const PrefetchMode prefetch_mode,
-  const uint64_t bulk_mode_chunk_size
-) {
+size_t OrderedCountWithPickle(const Graph &g) {
   size_t total = 0;
-  const uint64_t chunk_size = \
-    (prefetch_mode == PrefetchMode::BULK_PREFETCH) ? bulk_mode_chunk_size : 16384;
-  // If u is divisible by prefetch_trigger_mode, we send a prefetch hint
-  const uint64_t prefetch_trigger_modulo = \
-    (prefetch_mode == PrefetchMode::BULK_PREFETCH) ? bulk_mode_chunk_size : 1;
   #pragma omp parallel
   {
 #if ENABLE_PICKLEDEVICE==1
@@ -123,12 +115,10 @@ size_t OrderedCountWithPrefetch(
     *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
     //#pragma omp parallel for reduction(+ : total) schedule(dynamic, 64)
-    #pragma omp for reduction(+ : total) schedule(dynamic, chunk_size)
+    #pragma omp for reduction(+ : total) schedule(dynamic, 16384)
     for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
-      if (u % prefetch_trigger_modulo == 0) {
-        *UCPage = (uint64_t)(u);
-      }
+      *UCPage = (uint64_t)(u);
 #endif
       for (NodeID v : g.out_neigh(u)) {
         if (v > u)
@@ -243,7 +233,7 @@ size_t DoTC(const Graph &g, int trial_num) {
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
     if (use_pdev == 1) {
-      result = OrderedCountWithPrefetch(g, prefetch_mode, bulk_mode_chunk_size);
+      result = OrderedCountWithPickle(g);
     } else {
       result = OrderedCount(g);
     }
