@@ -91,23 +91,12 @@ void PageRankPullGS(
       *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
 #endif
     }
-  //  if (logging_enabled)
-  //    PrintStep(iter, error);
-  //  if (error < epsilon)
-  //    break;
-  //}
 }
 
 // Do 1 iteration of PR using GS method with prefetcher
-void PageRankPullGSWithPrefetch(
-  const Graph &g, pvector<ScoreT>& scores, pvector<ScoreT>& outgoing_contrib,
-  const PrefetchMode prefetch_mode, const uint64_t bulk_mode_chunk_size
+void PageRankPullGSWithPickle(
+  const Graph &g, pvector<ScoreT>& scores, pvector<ScoreT>& outgoing_contrib
 ) {
-  const uint64_t chunk_size = \
-    (prefetch_mode == PrefetchMode::BULK_PREFETCH) ? bulk_mode_chunk_size : 16384;
-  // If u is divisible by prefetch_trigger_mode, we send a prefetch hint
-  const uint64_t prefetch_trigger_modulo = \
-    (prefetch_mode == PrefetchMode::BULK_PREFETCH) ? bulk_mode_chunk_size : 1;
   const ScoreT init_score = 1.0f / g.num_nodes();
   const ScoreT base_score = (1.0f - kDamp) / g.num_nodes();
   #pragma omp parallel for
@@ -121,12 +110,10 @@ void PageRankPullGSWithPrefetch(
       const uint64_t thread_id = (uint64_t)omp_get_thread_num();
       *PerfPage = (thread_id << 1) | PERF_THREAD_START;
 #endif
-      #pragma omp for reduction(+ : error) schedule(dynamic, chunk_size)
+      #pragma omp for reduction(+ : error) schedule(dynamic, 16384)
       for (NodeID u=0; u < g.num_nodes(); u++) {
 #if ENABLE_PICKLEDEVICE==1
-        if (u % prefetch_trigger_modulo == 0) {
-          *UCPage = (uint64_t)(u);
-        }
+        *UCPage = (uint64_t)(u);
 #endif
         ScoreT incoming_total = 0;
         for (NodeID v : g.in_neigh(u))
@@ -140,11 +127,6 @@ void PageRankPullGSWithPrefetch(
       *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
 #endif
     }
-  //  if (logging_enabled)
-  //    PrintStep(iter, error);
-  //  if (error < epsilon)
-  //    break;
-  //}
 }
 
 
@@ -266,9 +248,7 @@ pvector<ScoreT> DoPR(const Graph& g, int trial_num) {
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
     if (use_pdev == 1) {
-        PageRankPullGSWithPrefetch(
-            g, scores, outgoing_contrib, prefetch_mode, bulk_mode_chunk_size
-        );
+        PageRankPullGSWithPickle(g, scores, outgoing_contrib);
     } else {
         PageRankPullGS(g, scores, outgoing_contrib);;
     }
