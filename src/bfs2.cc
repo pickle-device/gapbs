@@ -75,12 +75,13 @@ them in parent array as negative numbers. Thus the encoding of parent is:
 
 using namespace std;
 uint64_t* UCPage = NULL;
+uint64_t* MaplePage = NULL;
 uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
 const uint64_t PERF_THREAD_COMPLETE = 1;
 
-int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
+int64_t TDStepWithPickle(const Graph &g, pvector<NodeID> &parent,
                            SlidingQueue<NodeID> &queue, const uint64_t prefetch_distance) {
   int64_t scout_count = 0;
   #pragma omp parallel
@@ -98,6 +99,52 @@ int64_t TDStepWithPrefetch(const Graph &g, pvector<NodeID> &parent,
       if (prefetch_iter < queue.end())
       {
           *UCPage = (uint64_t)(&(*q_iter));
+      }
+#endif
+      for (NodeID v : g.out_neigh(u)) {
+        NodeID curr_val = parent[v];
+        if (curr_val < 0) {
+          if (compare_and_swap(parent[v], curr_val, u)) {
+            lqueue.push_back(v);
+            scout_count += -curr_val;
+          }
+        }
+      }
+    }
+    lqueue.flush();
+#if ENABLE_PICKLEDEVICE==1
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
+  }
+  return scout_count;
+}
+
+int64_t TDStepWithMaple(const Graph &g, pvector<NodeID> &parent,
+                           SlidingQueue<NodeID> &queue, const uint64_t prefetch_distance) {
+  int64_t scout_count = 0;
+  #pragma omp parallel
+  {
+    QueueBuffer<NodeID> lqueue(queue);
+#if ENABLE_PICKLEDEVICE==1
+    const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+    #pragma omp for reduction(+ : scout_count) nowait
+    for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
+      NodeID u = *q_iter;
+#if ENABLE_PICKLEDEVICE==1
+      auto prefetch_iter = q_iter + prefetch_distance;
+      if (prefetch_iter < queue.end())
+      {
+          // Address calculation
+          NodeID pu = *prefetch_iter;
+          auto pneigh = g.out_neigh(pu);
+          uint64_t start = (uint64_t)pneigh.begin();
+          uint64_t end = (uint64_t)pneigh.end();
+          // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+          // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+          *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+          *UCPage = (uint64_t)(&(*q_iter)); // Here the actual work, we are reusing the Pickle's interface to trigger prefetch work
       }
 #endif
       for (NodeID v : g.out_neigh(u)) {
@@ -260,7 +307,7 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
   bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
 #endif
   std::cout << "Device specs: " << std::endl;
-  std::cout << "  . Use pdev: " << use_pdev << std::endl;
+  std::cout << "  . Use pdev (0: no prefetcher, 1: pickle, 2: maple): " << use_pdev << std::endl;
   std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
   std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
   std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
@@ -289,7 +336,9 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
     // Write dynamic info per run, ie., memory address of structures
     // doint before ROI so that the info will be printed out every time
 #if ENABLE_PICKLEDEVICE==1
-    auto job = createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent);
+    // gem5 will select the kernel base on the name of the job
+    std::string kernel_name = (use_pdev == 2) ? "bfs_maple_kernel" : "bfs_kernel";
+    auto job = createGraphJobUsingOutgoingEdges(&g, kernel_name, &queue, &parent);
 
     // ---
     // We have to manually set the AccessType and AddressingMode as we currently
@@ -313,11 +362,22 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
     g.getOutIndexArrayDescriptor()->name = "out_index";
     g.getOutNeighborsArrayDescriptor()->name = "out_neighbors";
     parent.getArrayDescriptor()->name = "parent";
-    pdev->sendJob(createGraphJobUsingOutgoingEdges(&g, "bfs_kernel", &queue, &parent));
+    pdev->sendJob(createGraphJobUsingOutgoingEdges(&g, kernel_name, &queue, &parent));
 
     UCPage = (uint64_t*) pdev->getUCPagePtr(0);
     std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
     assert(UCPage != nullptr);
+    if (use_pdev == 2) { // MAPLE
+        // The following two kernels are to emulate sending the start/end addresses to prefetch engine by MAPLE
+        {
+          PickleJob job(/*kernel_name*/"maple_kernel");
+          job.print();
+          pdev->sendJob(job);
+          std::cout << "Sent maple_kernel" << std::endl;
+        }
+        MaplePage = UCPage + 1;
+        std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+    }
 #endif
     #if ENABLE_GEM5==1
     m5_exit_addr(0);
@@ -325,10 +385,18 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int trial_num,
     std::cout << "ROI Start" << std::endl;
 
     num_visited_edges = 0;
-    while (!queue.empty()) {
-        edges_to_check -= scout_count;
-        scout_count = TDStepWithPrefetch(g, parent, queue, prefetch_distance);
-        queue.slide_window();
+    if (use_pdev == 1) { // Pickle prefetcher
+        while (!queue.empty()) {
+            edges_to_check -= scout_count;
+            scout_count = TDStepWithPickle(g, parent, queue, prefetch_distance);
+            queue.slide_window();
+        }
+    } else if (use_pdev == 2) { // Maple prefetcher
+        while (!queue.empty()) {
+            edges_to_check -= scout_count;
+            scout_count = TDStepWithMaple(g, parent, queue, prefetch_distance);
+            queue.slide_window();
+        }
     }
     #if CHECK_NUM_EDGES==1
     std::cout << "Number of visited edges: " << num_visited_edges << std::endl;
