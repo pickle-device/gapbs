@@ -69,6 +69,7 @@ graph, we use the heuristic in WorthRelabelling.
 using namespace std;
 
 uint64_t* UCPage = NULL;
+uint64_t* MaplePage = NULL;
 uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
@@ -141,6 +142,51 @@ size_t OrderedCountWithPickle(const Graph &g) {
   return total;
 }
 
+size_t OrderedCountWithMaple(const Graph &g, const uint64_t prefetch_distance) {
+  size_t total = 0;
+  #pragma omp parallel
+  {
+#if ENABLE_PICKLEDEVICE==1
+    const uint64_t thread_id = (uint64_t)omp_get_thread_num();
+    *PerfPage = (thread_id << 1) | PERF_THREAD_START;
+#endif
+    const uint64_t num_nodes = g.num_nodes();
+    //#pragma omp parallel for reduction(+ : total) schedule(dynamic, 64)
+    #pragma omp for reduction(+ : total) schedule(dynamic, 16384)
+    for (NodeID u=0; u < g.num_nodes(); u++) {
+#if ENABLE_PICKLEDEVICE==1
+        if (u + prefetch_distance < num_nodes)
+        {
+          // Address calculation
+          auto pneigh = g.out_neigh(u + prefetch_distance);
+          uint64_t start = (uint64_t)pneigh.begin();
+          uint64_t end = (uint64_t)pneigh.end();
+          // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
+          // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
+          *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+          *UCPage = (uint64_t)(u); // Here the actual work, we are reusing the Pickle's interface to trigger prefetch work
+        }
+#endif
+      for (NodeID v : g.out_neigh(u)) {
+        if (v > u)
+          break;
+        auto it = g.out_neigh(v).begin();
+        for (NodeID w : g.out_neigh(u)) {
+          if (w > v)
+            break;
+          while (*it < w)
+            it++;
+          if (w == *it)
+            total++;
+        }
+      }
+    }
+#if ENABLE_PICKLEDEVICE==1
+    *PerfPage = (thread_id << 1) | PERF_THREAD_COMPLETE;
+#endif
+  }
+  return total;
+}
 
 // Heuristic to see if sufficiently dense power-law graph
 bool WorthRelabelling(const Graph &g) {
@@ -197,15 +243,16 @@ size_t DoTC(const Graph &g, int trial_num) {
     bulk_mode_chunk_size = specs.bulk_mode_chunk_size;
 #endif
     std::cout << "Device specs: " << std::endl;
-    std::cout << "  . Use pdev: " << use_pdev << std::endl;
+    std::cout << "  . Use pdev (0: no prefetcher, 1: pickle, 2: maple): " << use_pdev << std::endl;
     std::cout << "  . Prefetch distance: " << prefetch_distance << std::endl;
     std::cout << "  . Prefetch mode (0: unknown, 1: single, 2: bulk): " << prefetch_mode << std::endl;
     std::cout << "  . Chunk size (should be non-zero in bulk mode): " << bulk_mode_chunk_size << std::endl;
 
     // Set up pickle job
 #if ENABLE_PICKLEDEVICE==1
-    if (use_pdev == 1) {
-        PickleJob job(/*kernel_name*/"tc_kernel");
+    if ((use_pdev == 1) || (use_pdev == 2)) {
+        std::string kernel_name = (use_pdev == 2) ? "tc_maple_kernel" : "tc_kernel";
+        PickleJob job(/*kernel_name*/kernel_name);
         // We get the array descriptors from the graph. Note that the relation between the arrays here
         // is already set up by the graph's constructor.
         std::shared_ptr<PickleArrayDescriptor> out_index_array_descriptor = g.getOutIndexArrayDescriptor();
@@ -225,6 +272,17 @@ size_t DoTC(const Graph &g, int trial_num) {
         UCPage = (uint64_t*) pdev->getUCPagePtr(0);
         std::cout << "UCPage: 0x" << std::hex << (uint64_t)UCPage << std::dec << std::endl;
         assert(UCPage != nullptr);
+        if (use_pdev == 2) { // MAPLE
+            // The following two kernels are to emulate sending the start/end addresses to prefetch engine by MAPLE
+            {
+                PickleJob job(/*kernel_name*/"maple_kernel");
+                job.print();
+                pdev->sendJob(job);
+                std::cout << "Sent maple_kernel" << std::endl;
+            }
+            MaplePage = UCPage + 1;
+            std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+        }
     }
 #endif
 
@@ -232,8 +290,10 @@ size_t DoTC(const Graph &g, int trial_num) {
 #if ENABLE_GEM5==1
     m5_exit_addr(0); // exit 3
 #endif // ENABLE_GEM5
-    if (use_pdev == 1) {
+    if (use_pdev == 1) { // Pickle
       result = OrderedCountWithPickle(g);
+    } else if (use_pdev == 2) { // MAPLE
+      result = OrderedCountWithMaple(g, prefetch_distance);
     } else {
       result = OrderedCount(g);
     }
