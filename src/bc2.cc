@@ -68,13 +68,13 @@ using namespace std;
 typedef float ScoreT;
 typedef double CountT;
 
-uint64_t* UCPage = NULL;
-uint64_t* UCPage_Kernel2 = NULL;
-uint64_t* UCPage_Kernel3 = NULL;
-uint64_t* MaplePage = NULL;
-uint64_t* MaplePage2 = NULL;
-uint64_t* MaplePage3 = NULL;
-uint64_t* PerfPage = NULL;
+volatile uint64_t* UCPage = NULL;
+volatile uint64_t* UCPage_Kernel2 = NULL;
+volatile uint64_t* UCPage_Kernel3 = NULL;
+volatile uint64_t* MaplePage = NULL;
+volatile uint64_t* MaplePage2 = NULL;
+volatile uint64_t* MaplePage3 = NULL;
+volatile uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
 const uint64_t PERF_THREAD_COMPLETE = 1;

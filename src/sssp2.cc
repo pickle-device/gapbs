@@ -80,12 +80,12 @@ execution order, leading to significant speedup on large diameter road networks.
 
 using namespace std;
 
-uint64_t* UCPage = NULL;
-uint64_t* UCPage_Kernel1 = NULL; // Prefetch RelaxEdges with checking threshold
-uint64_t* UCPage_Kernel2 = NULL; // Prefetch RelaxEdges without checking threshold
-uint64_t* UCPage_Kernel3 = NULL; // Tell the prefetcher about threshold
-uint64_t* MaplePage = NULL;
-uint64_t* PerfPage = NULL;
+volatile uint64_t* UCPage = NULL;
+volatile uint64_t* UCPage_Kernel1 = NULL; // Prefetch RelaxEdges with checking threshold
+volatile uint64_t* UCPage_Kernel2 = NULL; // Prefetch RelaxEdges without checking threshold
+volatile uint64_t* UCPage_Kernel3 = NULL; // Tell the prefetcher about threshold
+volatile uint64_t* MaplePage = NULL;
+volatile uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
 const uint64_t PERF_THREAD_COMPLETE = 1;
