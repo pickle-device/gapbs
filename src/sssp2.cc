@@ -550,7 +550,7 @@ pvector<WeightT> DoSSSP(
         job.print();
         pdev->sendJob(job);
         std::cout << "Sent maple_kernel" << std::endl;
-        MaplePage = UCPage + 1;
+        MaplePage = UCPage + 4;
         std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
       }
 #endif

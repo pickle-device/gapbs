@@ -72,6 +72,8 @@ uint64_t* UCPage = NULL;
 uint64_t* UCPage_Kernel2 = NULL;
 uint64_t* UCPage_Kernel3 = NULL;
 uint64_t* MaplePage = NULL;
+uint64_t* MaplePage2 = NULL;
+uint64_t* MaplePage3 = NULL;
 uint64_t* PerfPage = NULL;
 
 const uint64_t PERF_THREAD_START = 0;
@@ -409,8 +411,12 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
             job.print();
             pdev->sendJob(job);
             std::cout << "Sent maple_kernel" << std::endl;
-            MaplePage = UCPage + 1;
+            MaplePage = UCPage + 3;
+            MaplePage2 = UCPage + 4;
+            MaplePage3 = UCPage + 5;
             std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+            std::cout << "MaplePage2: 0x" << std::hex << (uint64_t)MaplePage2 << std::dec << std::endl;
+            std::cout << "MaplePage3: 0x" << std::hex << (uint64_t)MaplePage3 << std::dec << std::endl;
         }
     }
   }
