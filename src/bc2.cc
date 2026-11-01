@@ -406,17 +406,31 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
         std::cout << "UCPage_Kernel3: 0x" << std::hex << (uint64_t)UCPage_Kernel3 << std::dec << std::endl;
         assert(UCPage != nullptr);
         if (use_pdev == 2) { // MAPLE
-            // The following kernel is to emulate sending the start/end addresses to prefetch engine by MAPLE
-            PickleJob job(/*kernel_name*/"maple_kernel");
-            job.print();
-            pdev->sendJob(job);
-            std::cout << "Sent maple_kernel" << std::endl;
-            MaplePage = UCPage + 3;
-            MaplePage2 = UCPage + 4;
-            MaplePage3 = UCPage + 5;
-            std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
-            std::cout << "MaplePage2: 0x" << std::hex << (uint64_t)MaplePage2 << std::dec << std::endl;
-            std::cout << "MaplePage3: 0x" << std::hex << (uint64_t)MaplePage3 << std::dec << std::endl;
+            // The following kernels are to emulate sending the start/end addresses to prefetch engine by MAPLE
+            {
+                PickleJob job(/*kernel_name*/"maple_kernel");
+                job.print();
+                pdev->sendJob(job);
+                std::cout << "Sent maple_kernel" << std::endl;
+                MaplePage = UCPage + 3;
+                std::cout << "MaplePage: 0x" << std::hex << (uint64_t)MaplePage << std::dec << std::endl;
+            }
+            {
+                PickleJob job(/*kernel_name*/"maple_kernel");
+                job.print();
+                pdev->sendJob(job);
+                std::cout << "Sent maple_kernel" << std::endl;
+                MaplePage2 = UCPage + 4;
+                std::cout << "MaplePage2: 0x" << std::hex << (uint64_t)MaplePage2 << std::dec << std::endl;
+            }
+            {
+                PickleJob job(/*kernel_name*/"maple_kernel");
+                job.print();
+                pdev->sendJob(job);
+                std::cout << "Sent maple_kernel" << std::endl;
+                MaplePage3 = UCPage + 5;
+                std::cout << "MaplePage3: 0x" << std::hex << (uint64_t)MaplePage3 << std::dec << std::endl;
+            }
         }
     }
   }
