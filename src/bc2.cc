@@ -489,8 +489,11 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
             uint64_t start = (uint64_t)pneigh.begin();
             uint64_t end = (uint64_t)pneigh.end();
             // Maple actually has to send out the start and the end addresses, so it have to send out two 64-bit integers
-            // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending a dummy value to the Maple's page
-            *MaplePage = start + end; // Dummy value to make sure the `start` and `end` variables are not optimized out
+            // Maple needs to send start/end twice as it prefetches two IMAs: path_counts[out_neigh[i]] and deltas[out_neigh[i]]
+            // We are reusing the Pickle's interface, which only needs 1 integer, so we are sending dummy values to the Maple's pages
+            *MaplePage = start + end; // Dummy value
+            *MaplePage2 = start; // Dummy value
+            *MaplePage3 = end; // Dummy value
             *UCPage_Kernel2 = (uint64_t)(&(*it));
           }
 #endif    
